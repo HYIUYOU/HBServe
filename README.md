@@ -1,4 +1,4 @@
-# HBServe pd分离架构
+# HBServe 
 
 基于vLLM实现的简易pd(prefill-decode)分离架构，支持KV缓存传输、分块prefill和CUDA graph优化。
 
