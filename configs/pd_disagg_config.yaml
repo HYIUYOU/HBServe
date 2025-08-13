@@ -1,0 +1,123 @@
+# pd分离架构配置文件
+
+# 基础模型配置
+model:
+  path: "~/huggingface/Qwen3-0.6B/"
+  tensor_parallel_size: 1
+
+# 性能配置
+performance:
+  max_num_seqs: 256
+  max_num_batched_tokens: 2048
+
+# KV传输配置
+kv_transfer:
+  backend: "nccl"  # "nccl" 或 "mooncake"
+  buffer_size: 1073741824  # 1GB
+  ip: "127.0.0.1"
+  port: 12345
+
+# NCCL配置（当backend为nccl时使用）
+nccl:
+  world_size: 2
+  init_method: "tcp://127.0.0.1:12349"
+  backend: "nccl"
+
+# Mooncake配置（当backend为mooncake时使用）
+mooncake:
+  prefill_url: "127.0.0.1:12346"
+  decode_url: "127.0.0.1:12347"
+  metadata_server: "127.0.0.1:12348"
+  protocol: "tcp"
+  device_name: ""
+
+# RPC配置
+rpc:
+  port_base: 50051
+  timeout: 30.0
+
+# 分块Prefill配置
+chunked_prefill:
+  enabled: true
+  chunk_size: 512
+  max_chunk_prefill_tokens: 4096
+
+# CUDA Graph配置
+cuda_graph:
+  enabled: true
+  max_seq_len: 2048
+
+# GPU实例配置
+gpu_instances:
+  # Prefill实例
+  - instance_id: "prefill-0"
+    instance_type: "prefill"
+    gpu_id: 0
+    host: "localhost"
+    port: 50051
+    kv_rank: 0
+    
+  # Decode实例
+  - instance_id: "decode-0"
+    instance_type: "decode"
+    gpu_id: 1
+    host: "localhost"
+    port: 50052
+    kv_rank: 1
+
+# 多GPU配置示例（注释掉）
+# gpu_instances_multi:
+#   # Prefill实例池
+#   - instance_id: "prefill-0"
+#     instance_type: "prefill"
+#     gpu_id: 0
+#     host: "node-1"
+#     port: 50051
+#     kv_rank: 0
+#     
+#   - instance_id: "prefill-1"
+#     instance_type: "prefill"
+#     gpu_id: 1
+#     host: "node-1"
+#     port: 50053
+#     kv_rank: 2
+#     
+#   # Decode实例池
+#   - instance_id: "decode-0"
+#     instance_type: "decode"
+#     gpu_id: 0
+#     host: "node-2"
+#     port: 50052
+#     kv_rank: 1
+#     
+#   - instance_id: "decode-1"
+#     instance_type: "decode"
+#     gpu_id: 1
+#     host: "node-2"
+#     port: 50054
+#     kv_rank: 3
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+# 监控配置
+monitoring:
+  enabled: true
+  metrics_port: 8080
+  stats_interval: 10  # 秒
+
+# 优化配置
+optimization:
+  # 内存优化
+  memory_pool_enabled: true
+  memory_pool_size: 2147483648  # 2GB
+  
+  # 批处理优化
+  dynamic_batching: true
+  max_batch_delay: 0.01  # 10ms
+  
+  # 预加载优化
+  model_preload: true
+  kv_cache_prealloc: true

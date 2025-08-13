@@ -1,0 +1,8 @@
+{
+  "prefill_url": "10.0.0.1:12346",
+  "decode_url": "10.0.0.2:12347",
+  "metadata_backend": "redis",
+  "metadata_server": "10.0.0.3:6379",
+  "protocol": "tcp",
+  "device_name": "mlx5_0"
+}
