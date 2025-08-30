@@ -14,9 +14,9 @@ from pathlib import Path
 # 添加父目录到路径
 sys.path.append(str(Path(__file__).parent.parent))
 
-from hbserve.pd_disagg.config import PdDisaggConfig, KVTransferBackend, InstanceType
-from hbserve.pd_disagg.disaggregated_llm import DisaggregatedLLM
-from hbserve.pd_disagg.gpu_instance import GpuInstance
+from HBserve.pd_disagg.config import PdDisaggConfig, KVTransferBackend, InstanceType
+from HBserve.pd_disagg.disaggregated_llm import DisaggregatedLLM
+from HBserve.pd_disagg.gpu_instance import GpuInstance
 
 
 class PdDisaggServer:

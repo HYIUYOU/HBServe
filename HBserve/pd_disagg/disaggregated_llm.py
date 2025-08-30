@@ -9,7 +9,7 @@ from transformers import AutoTokenizer
 from .config import PdDisaggConfig
 from .cpu_scheduler import CpuScheduler
 from .gpu_instance import GpuInstance
-from hbserve.sampling_params import SamplingParams
+from HBserve.sampling_params import SamplingParams
 
 
 class DisaggregatedLLM:

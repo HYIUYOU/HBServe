@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
-from hbserve.sampling_params import SamplingParams
+from HBserve.sampling_params import SamplingParams
 from .config import PdDisaggConfig, InstanceType
 from .rpc_client import RpcClient
 

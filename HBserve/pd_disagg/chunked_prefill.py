@@ -9,8 +9,8 @@ from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 import math
 
-from hbserve.engine.sequence import Sequence
-from hbserve.engine.model_runner import ModelRunner
+from HBserve.engine.sequence import Sequence
+from HBserve.engine.model_runner import ModelRunner
 from .config import PdDisaggConfig
 
 

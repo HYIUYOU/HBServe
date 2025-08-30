@@ -1,6 +1,6 @@
-# HBServe pd分离架构
+# HBserve pd分离架构
 
-基于HBServe实现的简易pd(prefill-decode)分离架构，支持KV缓存传输、分块prefill和CUDA graph优化。
+基于HBserve实现的简易pd(prefill-decode)分离架构，支持KV缓存传输、分块prefill和CUDA graph优化。
 
 ## 功能特性
 
@@ -14,7 +14,7 @@
 ### 📋 技术特点
 - **异步调度**: CPU端异步调度，支持高并发
 - **内存优化**: KV缓存查找缓冲区，处理乱序请求
-- **兼容接口**: 保持与原始HBServe的接口兼容
+- **兼容接口**: 保持与原始HBserve的接口兼容
 - **灵活部署**: 支持单机多GPU和多机部署
 
 ## 架构设计
@@ -56,11 +56,9 @@
 
 ```bash
 # 基础依赖
-pip install torch transformers
+cd HBserve
+pip install -e . 
 
-# NCCL支持（通常随PyTorch安装）
-# Mooncake支持（可选）
-pip install mooncake  # 按照Mooncake文档安装
 ```
 
 ### 2. 下载模型
@@ -73,10 +71,18 @@ huggingface-cli download --resume-download Qwen/Qwen3-0.6B \
 
 ### 3. 运行示例
 
+
+```bash
+python example.py
+
+```
+
+-----------------------------------
+
 ```python
 import asyncio
-from hbserve.pd_disagg import DisaggregatedLLM, PdDisaggConfig, KVTransferBackend
-from hbserve.sampling_params import SamplingParams
+from HBserve.pd_disagg import DisaggregatedLLM, PdDisaggConfig, KVTransferBackend
+from HBserve.sampling_params import SamplingParams
 
 # 创建配置
 config = PdDisaggConfig(
@@ -113,16 +119,16 @@ asyncio.run(main())
 ### 4. 兼容接口
 
 ```python
-# 与原始HBServe兼容的同步接口
-from hbserve.pd_disagg import LLM
-from hbserve.sampling_params import SamplingParams
+# 与原始HBserve兼容的同步接口
+from HBserve.pd_disagg import LLM
+from HBserve.sampling_params import SamplingParams
 
 llm = LLM("~/huggingface/Qwen3-0.6B/", 
           kv_transfer_backend="nccl",
           chunked_prefill_enabled=True)
 
 sampling_params = SamplingParams(temperature=0.6, max_tokens=256)
-prompts = ["Hello, pd-disagg HBServe!"]
+prompts = ["Hello, pd-disagg HBserve!"]
 outputs = llm.generate(prompts, sampling_params)
 print(outputs[0]["text"])
 ```
@@ -376,7 +382,7 @@ python scripts/start_pd_disagg.py --config configs/pd_disagg_config.yaml --log-l
 ### 添加新的KV传输Backend
 
 ```python
-from hbserve.pd_disagg.kv_transfer.base import KVTransferBase
+from HBserve.pd_disagg.kv_transfer.base import KVTransferBase
 
 class CustomKVTransfer(KVTransferBase):
     async def send_kv_cache(self, request_id, kv_buffer, target_rank):
@@ -391,7 +397,7 @@ class CustomKVTransfer(KVTransferBase):
 ### 自定义调度策略
 
 ```python
-from hbserve.pd_disagg.cpu_scheduler import CpuScheduler
+from HBserve.pd_disagg.cpu_scheduler import CpuScheduler
 
 class CustomScheduler(CpuScheduler):
     async def _schedule_waiting_requests(self):

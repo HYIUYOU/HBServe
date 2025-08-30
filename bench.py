@@ -1,7 +1,7 @@
 import os
 import time
 from random import randint, seed
-from hbserve import LLM, SamplingParams
+from HBserve import LLM, SamplingParams
 # from vllm import LLM, SamplingParams
 
 

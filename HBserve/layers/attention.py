@@ -4,7 +4,7 @@ import triton
 import triton.language as tl
 
 from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
-from hbserve.utils.context import get_context
+from HBserve.utils.context import get_context
 
 # key.shape = [N,num_heads,head_dim] ==> key.stride(0) = num_heads * head_dim == D
 # store_kvcache_kernel[(N,)](key, key.stride(0), value, value.stride(0), 
