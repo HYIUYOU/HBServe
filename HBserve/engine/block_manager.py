@@ -2,7 +2,7 @@ from collections import deque
 import xxhash
 import numpy as np
 
-from hbserve.engine.sequence import Sequence
+from HBserve.engine.sequence import Sequence
 
 
 class Block:

@@ -16,9 +16,9 @@ logging.basicConfig(
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
-from hbserve.pd_disagg.config import PdDisaggConfig, KVTransferBackend, InstanceType
-from hbserve.pd_disagg.disaggregated_llm import DisaggregatedLLM, LLM
-from hbserve.sampling_params import SamplingParams
+from HBserve.pd_disagg.config import PdDisaggConfig, KVTransferBackend, InstanceType
+from HBserve.pd_disagg.disaggregated_llm import DisaggregatedLLM, LLM
+from HBserve.sampling_params import SamplingParams
 
 
 async def async_example():

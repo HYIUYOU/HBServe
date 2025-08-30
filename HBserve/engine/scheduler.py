@@ -1,8 +1,8 @@
 from collections import deque
 
-from hbserve.config import Config
-from hbserve.engine.sequence import Sequence, SequenceStatus
-from hbserve.engine.block_manager import BlockManager
+from HBserve.config import Config
+from HBserve.engine.sequence import Sequence, SequenceStatus
+from HBserve.engine.block_manager import BlockManager
 
 
 class Scheduler:

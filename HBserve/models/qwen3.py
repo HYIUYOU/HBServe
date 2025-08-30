@@ -3,12 +3,12 @@ from torch import nn
 import torch.distributed as dist
 from transformers import Qwen3Config
 
-from hbserve.layers.activation import SiluAndMul
-from hbserve.layers.attention import Attention
-from hbserve.layers.layernorm import RMSNorm
-from hbserve.layers.linear import QKVParallelLinear, MergedColumnParallelLinear, RowParallelLinear
-from hbserve.layers.rotary_embedding import get_rope
-from hbserve.layers.embed_head import VocabParallelEmbedding, ParallelLMHead
+from HBserve.layers.activation import SiluAndMul
+from HBserve.layers.attention import Attention
+from HBserve.layers.layernorm import RMSNorm
+from HBserve.layers.linear import QKVParallelLinear, MergedColumnParallelLinear, RowParallelLinear
+from HBserve.layers.rotary_embedding import get_rope
+from HBserve.layers.embed_head import VocabParallelEmbedding, ParallelLMHead
 
 
 class Qwen3Attention(nn.Module):

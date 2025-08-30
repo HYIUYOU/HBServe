@@ -9,10 +9,10 @@ from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 from enum import Enum
 
-from hbserve.config import Config
-from hbserve.engine.model_runner import ModelRunner
-from hbserve.engine.sequence import Sequence, SequenceStatus
-from hbserve.sampling_params import SamplingParams
+from HBserve.config import Config
+from HBserve.engine.model_runner import ModelRunner
+from HBserve.engine.sequence import Sequence, SequenceStatus
+from HBserve.sampling_params import SamplingParams
 
 from .config import PdDisaggConfig, InstanceType
 from .kv_transfer import KVTransferManager, KVBuffer

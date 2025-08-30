@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hbserve"
 version = "0.2.0"
-authors = [{ name = "Xingkai Yu" }]
+authors = [{ name = "Yiyuan He" }]
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
@@ -24,4 +24,4 @@ Homepage="https://github.com/GeeeekExplorer/hbserve"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["hbserve*"]
+include = ["HBserve*"]

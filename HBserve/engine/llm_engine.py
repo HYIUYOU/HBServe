@@ -5,11 +5,11 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 import torch.multiprocessing as mp
 
-from hbserve.config import Config
-from hbserve.sampling_params import SamplingParams
-from hbserve.engine.sequence import Sequence
-from hbserve.engine.scheduler import Scheduler
-from hbserve.engine.model_runner import ModelRunner
+from HBserve.config import Config
+from HBserve.sampling_params import SamplingParams
+from HBserve.engine.sequence import Sequence
+from HBserve.engine.scheduler import Scheduler
+from HBserve.engine.model_runner import ModelRunner
 
 
 class LLMEngine:
