@@ -16,7 +16,7 @@ def apply_rotary_emb(
     return torch.cat((y1, y2), dim=-1).to(x.dtype)
 
 
-class RotaryEmbedding(nn.Module):
+class RotaryEmbeddingImpl(nn.Module):
 
     def __init__(
         self,
@@ -55,7 +55,49 @@ class RotaryEmbedding(nn.Module):
         return query, key
 
 
-@lru_cache(1)
+class DeviceAwareRotaryEmbedding(nn.Module):
+
+    def __init__(
+        self,
+        head_size: int,
+        rotary_dim: int,
+        max_position_embeddings: int,
+        base: float,
+    ) -> None:
+        super().__init__()
+        self.head_size = head_size
+        self.rotary_dim = rotary_dim
+        self.max_position_embeddings = max_position_embeddings
+        self.base = base
+        # 用于承载模块设备，随 layer.to(device) 一起迁移
+        self.register_buffer("device_anchor", torch.empty(0), persistent=False)
+        # 每个device一个实现实例，避免跨设备搬运cos/sin
+        self._impl_by_device: dict[str, RotaryEmbeddingImpl] = {}
+
+    def _get_impl(self, device: torch.device) -> RotaryEmbeddingImpl:
+        key = str(device)
+        impl = self._impl_by_device.get(key)
+        if impl is None:
+            impl = RotaryEmbeddingImpl(
+                self.head_size,
+                self.rotary_dim,
+                self.max_position_embeddings,
+                self.base,
+            ).to(device)
+            self._impl_by_device[key] = impl
+        return impl
+
+    def forward(
+        self,
+        positions: torch.Tensor,
+        query: torch.Tensor,
+        key: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        target_device = self.device_anchor.device
+        impl = self._get_impl(target_device)
+        return impl(positions.to(target_device), query.to(target_device), key.to(target_device))
+
+
 def get_rope(
     head_size: int,
     rotary_dim: int,
@@ -64,5 +106,6 @@ def get_rope(
     rope_scaling: dict | None = None,
 ):
     assert rope_scaling is None
-    rotary_emb = RotaryEmbedding(head_size, rotary_dim, max_position, base)
+    # 返回按设备管理的RoPE封装，避免跨设备共享同一buffer
+    rotary_emb = DeviceAwareRotaryEmbedding(head_size, rotary_dim, max_position, base)
     return rotary_emb

@@ -1,3 +1,4 @@
+import os
 import torch
 from torch import nn
 import triton
@@ -68,26 +69,81 @@ class Attention(nn.Module):
         self.k_cache = self.v_cache = torch.tensor([])
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+        DEBUG = os.environ.get("HB_DEBUG", "0") != "0"
+        def log(msg):
+            if DEBUG:
+                print(f"[HB-Debug][Attention] {msg}")
         o: torch.Tensor
-        q = q.view(-1, self.num_heads, self.head_dim) # 新计算得到的Q
+        q = q.view(-1, self.num_heads, self.head_dim)
         k = k.view(-1, self.num_kv_heads, self.head_dim)
-        v = v.view(-1, self.num_kv_heads, self.head_dim) # 新计算得到的KV
+        v = v.view(-1, self.num_kv_heads, self.head_dim)
         context = get_context()
+        # 统一上下文与缓存到当前计算设备，避免Triton/Flash-Attn跨设备访问
+        dev = q.device
+        # 确保当前CUDA上下文与张量所在设备一致（Triton/FlashAttn依赖当前device）
+        torch.cuda.set_device(dev)
+        log(f"set current device -> {dev}")
+        log(f"q.dev={q.device} k.dev={k.device} v.dev={v.device} q.is_cuda={q.is_cuda}")
+        if context.slot_mapping is not None and context.slot_mapping.device != dev:
+            context.slot_mapping = context.slot_mapping.to(dev, non_blocking=True)
+        if context.block_tables is not None and context.block_tables.device != dev:
+            context.block_tables = context.block_tables.to(dev, non_blocking=True)
+        if hasattr(context, "cu_seqlens_q") and context.cu_seqlens_q is not None and context.cu_seqlens_q.device != dev:
+            context.cu_seqlens_q = context.cu_seqlens_q.to(dev, non_blocking=True)
+        if hasattr(context, "cu_seqlens_k") and context.cu_seqlens_k is not None and context.cu_seqlens_k.device != dev:
+            context.cu_seqlens_k = context.cu_seqlens_k.to(dev, non_blocking=True)
+        if hasattr(context, "context_lens") and context.context_lens is not None and context.context_lens.device != dev:
+            context.context_lens = context.context_lens.to(dev, non_blocking=True)
+
         k_cache, v_cache = self.k_cache, self.v_cache # 拿到KV Cache
-        if k_cache.numel() and v_cache.numel():
-            store_kvcache(k, v, k_cache, v_cache, context.slot_mapping) # 将新计算得到的KV存储到KV Cache中
+        k_cache_dev = k_cache if (k_cache.numel() == 0 or k_cache.device == dev) else k_cache.to(dev)
+        v_cache_dev = v_cache if (v_cache.numel() == 0 or v_cache.device == dev) else v_cache.to(dev)
+        # 保证传入triton/flash-attn的数据在同一设备且连续
+        if context.slot_mapping is not None:
+            context.slot_mapping = context.slot_mapping.contiguous()
+        q = q.contiguous()
+        k = k.contiguous()
+        v = v.contiguous()
+        if k_cache_dev.numel():
+            k_cache_dev = k_cache_dev.contiguous()
+        if v_cache_dev.numel():
+            v_cache_dev = v_cache_dev.contiguous()
+        if DEBUG:
+            log(f"slot_mapping.dev={getattr(context.slot_mapping,'device',None)} is_cuda={getattr(context.slot_mapping,'is_cuda',False)}")
+            log(f"k_cache.dev={k_cache_dev.device if k_cache_dev.numel() else None} v_cache.dev={v_cache_dev.device if v_cache_dev.numel() else None}")
+            log(f"contig q={q.is_contiguous()} k={k.is_contiguous()} v={v.is_contiguous()}")
+
+        # 额外保障：所有传入triton的张量必须是cuda张量
+        if k_cache_dev.numel() and v_cache_dev.numel() and context.slot_mapping is not None:
+            if not (k.is_cuda and v.is_cuda and k_cache_dev.is_cuda and v_cache_dev.is_cuda and context.slot_mapping.is_cuda):
+                k = k.to(dev, non_blocking=True)
+                v = v.to(dev, non_blocking=True)
+                k_cache_dev = k_cache_dev.to(dev, non_blocking=True)
+                v_cache_dev = v_cache_dev.to(dev, non_blocking=True)
+                context.slot_mapping = context.slot_mapping.to(dev, non_blocking=True)
+            log("call store_kvcache")
+            store_kvcache(k, v, k_cache_dev, v_cache_dev, context.slot_mapping) # 将新计算得到的KV存储到KV Cache中
         if context.is_prefill:
             if context.block_tables is not None:    # prefix cache
-                k, v = k_cache, v_cache # 使用KV Cache
+                k, v = k_cache_dev, v_cache_dev # 使用KV Cache（确保与q同设备）
             # q => 新的token，不包含prefix caching
             # k,v => 包含prefix caching的KV
+            log("call flash_attn_varlen_func")
+            # 确保可变长输入相关张量连续
+            if hasattr(context, "cu_seqlens_q") and context.cu_seqlens_q is not None:
+                context.cu_seqlens_q = context.cu_seqlens_q.contiguous()
+            if hasattr(context, "cu_seqlens_k") and context.cu_seqlens_k is not None:
+                context.cu_seqlens_k = context.cu_seqlens_k.contiguous()
+            if context.block_tables is not None:
+                context.block_tables = context.block_tables.contiguous()
             o = flash_attn_varlen_func(q, k, v,
                                        max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
                                        max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
                                        softmax_scale=self.scale, causal=True, block_table=context.block_tables) 
         else:    # decode
             # TODO：check q，k，v shape
-            o = flash_attn_with_kvcache(q.unsqueeze(1), k_cache, v_cache,
+            log("call flash_attn_with_kvcache")
+            o = flash_attn_with_kvcache(q.unsqueeze(1), k_cache_dev, v_cache_dev,
                                         cache_seqlens=context.context_lens, block_table=context.block_tables, 
                                         softmax_scale=self.scale, causal=True)
         o = o.view(-1, self.num_heads * self.head_dim)
