@@ -16,7 +16,7 @@ def quick_start_example():
     print("=" * 50)
     
     # 1. 设置模型路径（请根据实际情况修改）
-    model_path = os.path.expanduser("/root/llm-resource/Models/Qwen3-0.6B")
+    model_path = os.path.expanduser("../Qwen3-0.6B")
     
     if not os.path.exists(model_path):
         print(f"❌ 模型路径不存在: {model_path}")
