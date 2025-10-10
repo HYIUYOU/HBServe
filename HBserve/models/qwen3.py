@@ -1,4 +1,5 @@
 import torch
+import copy
 from torch import nn
 import torch.distributed as dist
 from transformers import Qwen3Config
@@ -169,6 +170,12 @@ class Qwen3Model(nn.Module):
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         # 跟踪每层的设备位置
         self.layer_devices = {}
+        # 复制执行：记录被复制的层及其副本和设备
+        self.replicas: dict[int, nn.Module] = {}
+        self.replica_devices: dict[int, torch.device] = {}
+        self.replica_split_ratio: dict[int, float] = {}
+        # 自动调参：按两侧耗时自适应比例
+        self.replica_autotune: dict[int, dict] = {}
 
     def move_layer_to_device(self, layer_id: int, device: str | torch.device) -> None:
         """
@@ -220,6 +227,60 @@ class Qwen3Model(nn.Module):
         for layer_id, device in layer_device_map.items():
             self.move_layer_to_device(layer_id, device)
 
+    def replicate_layer_to_device(self, layer_id: int, device: str | torch.device, split_ratio: float = 0.5) -> None:
+        """
+        将指定层复制一个副本到目标GPU设备，用于批次切分并行执行该层。
+        split_ratio 决定在原设备上处理的batch比例（0-1之间），其余在副本设备上处理。
+        """
+        if layer_id < 0 or layer_id >= len(self.layers):
+            raise ValueError(f"层索引 {layer_id} 超出范围 [0, {len(self.layers)-1}]")
+        if not (0.0 < split_ratio < 1.0):
+            raise ValueError("split_ratio 需在 (0, 1) 区间内")
+        if isinstance(device, str):
+            device = torch.device(device)
+        # 深拷贝一份并迁移到目标设备
+        replica = copy.deepcopy(self.layers[layer_id]).to(device)
+        self.replicas[layer_id] = replica
+        self.replica_devices[layer_id] = device
+        self.replica_split_ratio[layer_id] = float(split_ratio)
+
+    def clear_layer_replication(self, layer_id: int | None = None) -> None:
+        """
+        清除指定层或全部层的复制副本。
+        """
+        if layer_id is None:
+            self.replicas.clear()
+            self.replica_devices.clear()
+            self.replica_split_ratio.clear()
+            return
+        self.replicas.pop(layer_id, None)
+        self.replica_devices.pop(layer_id, None)
+        self.replica_split_ratio.pop(layer_id, None)
+
+    def update_replication_split_ratio(self, layer_id: int, split_ratio: float) -> None:
+        """更新已复制层的切分比例（原设备比例）。"""
+        if layer_id not in self.replicas:
+            raise ValueError(f"层 {layer_id} 未配置复制，无法更新split_ratio")
+        if not (0.0 < split_ratio < 1.0):
+            raise ValueError("split_ratio 需在 (0, 1) 区间内")
+        self.replica_split_ratio[layer_id] = float(split_ratio)
+
+    def enable_replication_autotune(self, layer_id: int, beta: float = 0.2, min_ratio: float = 0.1, max_ratio: float = 0.9) -> None:
+        """
+        启用复制层的比例自适应：依据原/副本两侧耗时，逐步逼近更均衡的split_ratio。
+        beta: 指数平滑系数 (0,1]；min_ratio/max_ratio: 原设备比例上下界。
+        """
+        if layer_id not in self.replicas:
+            raise ValueError(f"层 {layer_id} 未配置复制，无法启用autotune")
+        if not (0.0 < beta <= 1.0):
+            raise ValueError("beta 需在 (0, 1] 区间内")
+        if not (0.0 < min_ratio < max_ratio < 1.0):
+            raise ValueError("min_ratio/max_ratio 需满足 0<min<max<1")
+        self.replica_autotune[layer_id] = {"beta": float(beta), "min": float(min_ratio), "max": float(max_ratio)}
+
+    def disable_replication_autotune(self, layer_id: int) -> None:
+        self.replica_autotune.pop(layer_id, None)
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -242,8 +303,123 @@ class Qwen3Model(nn.Module):
                 if residual is not None:
                     residual = residual.to(layer_device)
             
-            # 2. layer() ==> 将hidden_states和positions传递给layer
-            hidden_states, residual = layer(positions, hidden_states, residual)
+            # 如果该层配置了复制到另一设备，则对batch维度进行切分并行计算
+            if layer_id in self.replicas:
+                replica = self.replicas[layer_id]
+                replica_device = self.replica_devices[layer_id]
+                # 按配置比例切分batch：前半在原设备，后半在副本设备
+                batch_size = hidden_states.size(0)
+                ratio = self.replica_split_ratio.get(layer_id, 0.5)
+                split_idx = int(round(batch_size * ratio))
+                # 边界保护，至少1且保留另一侧至少1
+                split_idx = max(1, min(split_idx, batch_size - 1))
+                if split_idx == 0:  # 小批次不切分
+                    hidden_states, residual = layer(positions, hidden_states, residual)
+                else:
+                    # 准备两份输入
+                    hs_a = hidden_states[:split_idx]
+                    hs_b = hidden_states[split_idx:]
+                    pos_a = positions[:split_idx]
+                    pos_b = positions[split_idx:]
+                    res_a = None if residual is None else residual[:split_idx]
+                    res_b = None if residual is None else residual[split_idx:]
+
+                    # A 在原层设备计算（layer_device）
+                    if hs_a.device != layer_device:
+                        hs_a = hs_a.to(layer_device)
+                        pos_a = pos_a.to(layer_device)
+                        if res_a is not None:
+                            res_a = res_a.to(layer_device)
+                    # B 在副本设备计算
+                    if hs_b.device != replica_device:
+                        hs_b = hs_b.to(replica_device)
+                        pos_b = pos_b.to(replica_device)
+                        if res_b is not None:
+                            res_b = res_b.to(replica_device)
+
+                    # 并行执行（两个CUDA stream）
+                    stream_a = torch.cuda.Stream(device=layer_device.type + ":" + str(layer_device.index)) if layer_device.type == 'cuda' else None
+                    stream_b = torch.cuda.Stream(device=replica_device.type + ":" + str(replica_device.index)) if replica_device.type == 'cuda' else None
+
+                    out_a = out_b = res_out_a = res_out_b = None
+                    # cuda计时事件
+                    start_a = end_a = start_b = end_b = None
+                    if layer_device.type == 'cuda':
+                        start_a = torch.cuda.Event(enable_timing=True)
+                        end_a = torch.cuda.Event(enable_timing=True)
+                    if replica_device.type == 'cuda':
+                        start_b = torch.cuda.Event(enable_timing=True)
+                        end_b = torch.cuda.Event(enable_timing=True)
+
+                    if stream_a is not None:
+                        with torch.cuda.stream(stream_a):
+                            if start_a is not None:
+                                start_a.record(stream_a)
+                            out_a, res_out_a = layer(pos_a, hs_a, res_a)
+                            if end_a is not None:
+                                end_a.record(stream_a)
+                    else:
+                        out_a, res_out_a = layer(pos_a, hs_a, res_a)
+
+                    if stream_b is not None:
+                        with torch.cuda.stream(stream_b):
+                            if start_b is not None:
+                                start_b.record(stream_b)
+                            out_b, res_out_b = replica(pos_b, hs_b, res_b)
+                            if end_b is not None:
+                                end_b.record(stream_b)
+                    else:
+                        out_b, res_out_b = replica(pos_b, hs_b, res_b)
+
+                    # 同步与回传到layer_device以便后续继续
+                    if stream_a is not None:
+                        stream_a.synchronize()
+                    if stream_b is not None:
+                        stream_b.synchronize()
+
+                    if out_b.device != layer_device:
+                        out_b = out_b.to(layer_device)
+                    if res_out_b is not None and res_out_b.device != layer_device:
+                        res_out_b = res_out_b.to(layer_device)
+
+                    hidden_states = torch.cat([out_a, out_b], dim=0)
+                    if res_out_a is None and res_out_b is None:
+                        residual = None
+                    elif res_out_a is None:
+                        residual = torch.cat([torch.zeros_like(out_a), res_out_b], dim=0)
+                    elif res_out_b is None:
+                        residual = torch.cat([res_out_a, torch.zeros_like(out_b)], dim=0)
+                    else:
+                        residual = torch.cat([res_out_a, res_out_b], dim=0)
+
+                    # 自适应更新比例：依据两侧耗时估计目标比例
+                    if layer_id in self.replica_autotune and start_a is not None and end_a is not None and start_b is not None and end_b is not None:
+                        # 注意：必须在相应device上同步后再读取时间
+                        if stream_a is not None:
+                            stream_a.synchronize()
+                        if stream_b is not None:
+                            stream_b.synchronize()
+                        time_a = start_a.elapsed_time(end_a) if layer_device.type == 'cuda' else 0.0
+                        time_b = start_b.elapsed_time(end_b) if replica_device.type == 'cuda' else 0.0
+                        total = time_a + time_b
+                        if total > 0:
+                            # 目标：按耗时反比分配，使下一次原设备比例约等于 time_b/total
+                            target_ratio = time_b / total
+                            cfg = self.replica_autotune[layer_id]
+                            beta = cfg["beta"]
+                            new_ratio = (1.0 - beta) * ratio + beta * target_ratio
+                            new_ratio = max(cfg["min"], min(new_ratio, cfg["max"]))
+                            self.replica_split_ratio[layer_id] = new_ratio
+                            # 可选日志
+                            import os
+                            if os.environ.get("HB_REPLICA_LOG", "0") != "0":
+                                print(
+                                    f"[Replica][layer {layer_id}] time_a={time_a:.3f}ms time_b={time_b:.3f}ms "
+                                    f"ratio(old)={ratio:.3f} -> ratio(new)={new_ratio:.3f} (target={target_ratio:.3f})"
+                                )
+            else:
+                # 2. layer() ==> 将hidden_states和positions传递给layer
+                hidden_states, residual = layer(positions, hidden_states, residual)
         
         # 3. norm() ==> 将hidden_states和residual传递给norm
         hidden_states, _ = self.norm(hidden_states, residual)
