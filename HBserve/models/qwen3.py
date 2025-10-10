@@ -167,6 +167,58 @@ class Qwen3Model(nn.Module):
         self.embed_tokens = VocabParallelEmbedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([Qwen3DecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # 跟踪每层的设备位置
+        self.layer_devices = {}
+
+    def move_layer_to_device(self, layer_id: int, device: str | torch.device) -> None:
+        """
+        将指定层移动到目标设备
+        
+        Args:
+            layer_id: 层的索引 (从0开始)
+            device: 目标设备，可以是字符串如 'cuda:1' 或 torch.device 对象
+        """
+        if layer_id < 0 or layer_id >= len(self.layers):
+            raise ValueError(f"层索引 {layer_id} 超出范围 [0, {len(self.layers)-1}]")
+        
+        # 转换为torch.device对象
+        if isinstance(device, str):
+            device = torch.device(device)
+        
+        # 移动层到指定设备
+        self.layers[layer_id] = self.layers[layer_id].to(device)
+        
+        # 记录层的设备位置
+        self.layer_devices[layer_id] = device
+        
+        print(f"层 {layer_id} 已移动到设备 {device}")
+
+    def get_layer_device(self, layer_id: int) -> torch.device:
+        """
+        获取指定层的当前设备
+        
+        Args:
+            layer_id: 层的索引
+            
+        Returns:
+            层当前所在的设备
+        """
+        if layer_id in self.layer_devices:
+            return self.layer_devices[layer_id]
+        else:
+            # 如果没有记录，返回层当前的实际设备
+            return next(self.layers[layer_id].parameters()).device
+
+    def set_layer_device_distribution(self, layer_device_map: dict[int, str | torch.device]) -> None:
+        """
+        批量设置层的设备分布
+        
+        Args:
+            layer_device_map: 字典，键为层索引，值为目标设备
+            例如: {9: 'cuda:1', 10: 'cuda:1', 15: 'cuda:2'}
+        """
+        for layer_id, device in layer_device_map.items():
+            self.move_layer_to_device(layer_id, device)
 
     def forward(
         self,
@@ -177,9 +229,22 @@ class Qwen3Model(nn.Module):
         # 注意这里的input_ids 不包含prefix caching命中的部分 ==> hidden_states 不包含prefix caching命中的部分
         hidden_states = self.embed_tokens(input_ids) 
         residual = None
-        for layer in self.layers:
+        
+        for layer_id, layer in enumerate(self.layers):
+            # 检查层是否在不同的设备上
+            layer_device = self.get_layer_device(layer_id)
+            current_device = hidden_states.device
+            
+            # 如果层在不同的设备上，需要移动tensor到层的设备
+            if layer_device != current_device:
+                hidden_states = hidden_states.to(layer_device)
+                positions = positions.to(layer_device)
+                if residual is not None:
+                    residual = residual.to(layer_device)
+            
             # 2. layer() ==> 将hidden_states和positions传递给layer
             hidden_states, residual = layer(positions, hidden_states, residual)
+        
         # 3. norm() ==> 将hidden_states和residual传递给norm
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states

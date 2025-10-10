@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage="https://github.com/GeeeekExplorer/hbserve"
+Homepage="https://github.com/HYIUYOU/HBServe"
 
 [tool.setuptools.packages.find]
 where = ["."]
