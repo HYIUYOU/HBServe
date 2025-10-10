@@ -32,31 +32,41 @@ def quick_start_example():
         
         # 3. 动态调整层设备分布
         print("\n🔧 调整层设备分布...")
-        if hasattr(llm, 'model') and hasattr(llm.model, 'model'):
-            model = llm.model.model
-            
-            # 将第10层移动到GPU 1
-            print("将第10层移动到GPU 1...")
-            model.move_layer_to_device(9, 'cuda:1')
-            
-            # 批量设置更多层
-            layer_device_map = {
-                0: 'cuda:0',   # 第1层在GPU 0
-                1: 'cuda:0',   # 第2层在GPU 0
-                10: 'cuda:1',  # 第11层在GPU 1
-                11: 'cuda:1',  # 第12层在GPU 1
-            }
-            model.set_layer_device_distribution(layer_device_map)
-            
-            print("✅ 层设备分布调整完成")
-            
-            # 显示当前分布
+        # 通过 llm.model_runner.model.model 访问 Qwen3Model
+        try:
+            from torch.cuda import device_count
+            num_gpus = device_count()
+        except Exception:
+            num_gpus = 1
+
+        if hasattr(llm, 'model_runner') and hasattr(llm.model_runner, 'model') and hasattr(llm.model_runner.model, 'model'):
+            model = llm.model_runner.model.model
+
+            if num_gpus < 2:
+                print("⚠️ 仅检测到1个GPU，跳过跨设备层迁移示例")
+            else:
+                # 将第10层移动到GPU 1
+                print("将第10层移动到GPU 1...")
+                model.move_layer_to_device(9, 'cuda:1')
+
+                # 批量设置更多层（示例）
+                layer_device_map = {
+                    0: 'cuda:0',   # 第1层在GPU 0
+                    1: 'cuda:0',   # 第2层在GPU 0
+                    10: 'cuda:1',  # 第11层在GPU 1
+                    11: 'cuda:1',  # 第12层在GPU 1
+                }
+                model.set_layer_device_distribution(layer_device_map)
+
+                print("✅ 层设备分布调整完成")
+
+            # 显示当前分布（不论是否迁移成功，都打印前若干层所在设备）
             print("\n📊 当前层设备分布:")
             for layer_id in range(min(15, len(model.layers))):
                 device = model.get_layer_device(layer_id)
                 print(f"  层 {layer_id+1:2d}: {device}")
         else:
-            print("⚠️ 无法访问底层模型，跳过层设备管理")
+            print("⚠️ 无法通过 llm.model_runner 访问底层模型，跳过层设备管理")
         
         # 4. 进行推理测试
         print("\n🚀 开始推理测试...")
