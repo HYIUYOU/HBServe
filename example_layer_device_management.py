@@ -17,7 +17,7 @@ def example_basic_usage():
     print("=== 基本使用示例 ===")
     
     # 设置模型路径（请根据实际情况修改）
-    model_path = os.path.expanduser("/root/llm-resource/Models/Qwen3-0.6B")
+    model_path = os.path.expanduser("../Qwen3-0.6B")
     
     # 检查模型路径是否存在
     if not os.path.exists(model_path):
@@ -73,7 +73,7 @@ def example_layer_device_management():
     print("\n=== 动态层设备管理示例 ===")
     
     # 设置模型路径
-    model_path = os.path.expanduser("/root/llm-resource/Models/Qwen3-0.6B")
+    model_path = os.path.expanduser("../Qwen3-0.6B")
     
     if not os.path.exists(model_path):
         print(f"模型路径不存在: {model_path}")
@@ -136,7 +136,7 @@ def example_runtime_adjustment():
     """示例：运行时动态调整"""
     print("\n=== 运行时动态调整示例 ===")
     
-    model_path = os.path.expanduser("/root/llm-resource/Models/Qwen3-0.6B")
+    model_path = os.path.expanduser("../Qwen3-0.6B")
     
     if not os.path.exists(model_path):
         print(f"模型路径不存在: {model_path}")
@@ -201,7 +201,7 @@ def example_memory_optimization():
     """示例：内存优化策略"""
     print("\n=== 内存优化示例 ===")
     
-    model_path = os.path.expanduser("/root/llm-resource/Models/Qwen3-0.6B")
+    model_path = os.path.expanduser("../Qwen3-0.6B")
     
     if not os.path.exists(model_path):
         print(f"模型路径不存在: {model_path}")
