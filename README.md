@@ -4,6 +4,7 @@
 
 ## 🔜 快速开始
 
+### 命令行 cli
 ```bash
 # 1. 安装
 cd HBserve && pip install -e . 
@@ -16,6 +17,43 @@ huggingface-cli download --resume-download Qwen/Qwen3-0.6B \
 # 3. 运行
 python example.py
 ```
+### OpenAI 兼容 API 服务
+HBserve 支持 OpenAI 兼容的 API 格式，方便集成现有应用。
+
+#### 启动服务器
+```bash
+python openai_api_server.py \
+    --model-path ../Qwen3-0.6B \
+    --port 8000 \
+    --gpu-memory-utilization 0.6
+```
+#### API 端点
+
+- POST /v1/chat/completions - Chat 补全
+- POST /v1/completions - 文本补全
+- GET /v1/models - 列出模型
+- GET /health - 健康检查
+
+### 客户端
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="dummy")
+
+response = client.chat.completions.create(
+    model="Qwen3-0.6B",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+print(response.choices[0].message.content)
+```
+
+或者你可以使用我们提供的用例：
+
+```bash
+python example_api.py
+```
+
 
 ## 📦 核心功能
 
