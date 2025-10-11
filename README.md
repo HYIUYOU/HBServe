@@ -1,205 +1,126 @@
-# HBserve
+# 💻 HBserve
 
-基于vLLM实现的推理引擎
+基于vLLM实现的推理引擎，支持跨GPU层管理和并行执行优化。
 
-## 快速开始
-
-### 1. 安装依赖
+## 🔜 快速开始
 
 ```bash
-# 基础依赖
-cd HBserve
-pip install -e . 
+# 1. 安装
+cd HBserve && pip install -e . 
 
-```
-
-### 2. 下载模型
-
-```bash
+# 2. 下载模型
 huggingface-cli download --resume-download Qwen/Qwen3-0.6B \
   --local-dir ~/huggingface/Qwen3-0.6B/ \
   --local-dir-use-symlinks False
-```
 
-### 3. 运行示例
-
-
-```bash
+# 3. 运行
 python example.py
-
 ```
 
-# HBServe 动态层设备管理
+## 📦 核心功能
 
-这个功能允许您在HBServe的实际使用场景中将模型的不同层分配到不同的GPU设备上，实现跨GPU的层执行和动态设备调整。
+### 🔧 层设备管理（Layer Device Management）
+将不同层分配到不同GPU，解决单卡内存不足问题。
 
-## 功能特性
-
-- **单层设备移动**: 将指定层移动到目标GPU
-- **批量设备分布**: 一次性设置多个层的设备位置
-- **运行时动态调整**: 在推理过程中动态改变层的设备位置
-- **自动tensor传输**: 自动处理跨设备的数据传输
-- **设备位置跟踪**: 记录和查询每层的当前设备位置
-
-## 主要方法
-
-### 1. `move_layer_to_device(layer_id, device)`
-将指定层移动到目标设备。
-
-**参数:**
-- `layer_id` (int): 层的索引，从0开始
-- `device` (str | torch.device): 目标设备，如 'cuda:1'
-
-**示例:**
 ```python
-# 将第10层移动到GPU 1
+model = llm.model.model
+
+# 单层移动
 model.move_layer_to_device(9, 'cuda:1')
+
+# 批量分配
+model.set_layer_device_distribution({
+    9: 'cuda:1',
+    10: 'cuda:1',
+    15: 'cuda:2'
+})
 ```
 
-### 2. `set_layer_device_distribution(layer_device_map)`
-批量设置层的设备分布。
-
-**参数:**
-- `layer_device_map` (dict): 字典，键为层索引，值为目标设备
-
-**示例:**
-```python
-# 设置多个层的设备分布
-layer_device_map = {
-    9: 'cuda:1',   # 第10层在GPU 1
-    10: 'cuda:1',  # 第11层在GPU 1
-    15: 'cuda:2',  # 第16层在GPU 2
-}
-model.set_layer_device_distribution(layer_device_map)
-```
-
-### 3. `get_layer_device(layer_id)`
-获取指定层的当前设备。
-
-**参数:**
-- `layer_id` (int): 层的索引
-
-**返回:**
-- `torch.device`: 层当前所在的设备
-
-## 使用场景
-
-### 1. 负载均衡
-将模型层均匀分布到多个GPU上，实现负载均衡：
+### ⚡ 层复制并行（Layer Replication）
+将瓶颈层复制到另一GPU，batch切分并行执行，提升吞吐量。
 
 ```python
-# 将24层均匀分布到3个GPU
-num_gpus = 3
-for layer_id in range(len(model.layers)):
-    gpu_id = layer_id % num_gpus
-    model.move_layer_to_device(layer_id, f'cuda:{gpu_id}')
+# 基础用法
+model.replicate_layer_to_device(9, 'cuda:1', split_ratio=0.5)
+
+# 启用自适应调优（推荐）
+model.enable_replication_autotune(9, beta=0.3, min_ratio=0.2, max_ratio=0.8)
+
+# 查看调优日志
+# export HB_REPLICA_LOG=1
 ```
 
-### 2. 特定层优化
-将计算密集的层（如注意力层）分配到性能更好的GPU：
+**工作原理**：将batch切分到原始层（GPU0）和副本层（GPU1）并行计算，自动根据两侧耗时调整切分比例。
 
-```python
-# 将注意力层分配到高性能GPU
-attention_layers = [9, 10, 11, 12]  # 假设这些是注意力层
-for layer_id in attention_layers:
-    model.move_layer_to_device(layer_id, 'cuda:1')  # 高性能GPU
-```
-
-### 3. 内存优化
-将部分层移动到不同的GPU以节省内存：
-
-```python
-# 将后半部分层移动到GPU 1
-num_layers = len(model.layers)
-for layer_id in range(num_layers // 2, num_layers):
-    model.move_layer_to_device(layer_id, 'cuda:1')
-```
-
-### 4. 运行时动态调整
-根据运行时条件动态调整层的设备位置：
-
-```python
-# 根据内存使用情况动态调整
-if gpu_0_memory_usage > threshold:
-    # 将一些层移动到GPU 1
-    model.move_layer_to_device(10, 'cuda:1')
-    model.move_layer_to_device(11, 'cuda:1')
-```
-
-## 实际使用场景
-
-### 在HBServe中使用动态层设备管理
+## 使用示例
 
 ```python
 import os
 from HBserve import LLM, SamplingParams
-from transformers import AutoTokenizer
 
-# 加载模型
-model_path = "/path/to/your/model"
-tokenizer = AutoTokenizer.from_pretrained(model_path)
-llm = LLM(model_path, enforce_eager=True, tensor_parallel_size=1)
+os.environ['HB_REPLICA_LOG'] = '1'  # 启用日志
+llm = LLM(model_path, enforce_eager=True)
+model = llm.model.model
 
-# 访问底层模型进行层设备管理
-if hasattr(llm, 'model') and hasattr(llm.model, 'model'):
-    model = llm.model.model
-    
-    # 将第10层移动到GPU 1
-    model.move_layer_to_device(9, 'cuda:1')
-    
-    # 批量设置层设备分布
-    layer_device_map = {
-        9: 'cuda:1',   # 第10层
-        10: 'cuda:1',  # 第11层
-        15: 'cuda:2',  # 第16层
-    }
-    model.set_layer_device_distribution(layer_device_map)
+# 方案1: 层分布（解决内存问题）
+model.set_layer_device_distribution({0: 'cuda:0', 12: 'cuda:1'})
 
-# 正常进行推理
-sampling_params = SamplingParams(temperature=0.6, max_tokens=100)
-prompts = ["Tell me a story about AI"]
-formatted_prompts = [
-    tokenizer.apply_chat_template(
-        [{"role": "user", "content": prompt}],
-        tokenize=False,
-        add_generation_prompt=True,
-        enable_thinking=True
-    )
-    for prompt in prompts
-]
-outputs = llm.generate(formatted_prompts, sampling_params)
+# 方案2: 层复制（提升吞吐量）
+model.replicate_layer_to_device(9, 'cuda:1', split_ratio=0.5)
+model.enable_replication_autotune(9, beta=0.3)
+
+# 方案3: 组合使用
+model.set_layer_device_distribution({15: 'cuda:1'})
+model.replicate_layer_to_device(9, 'cuda:2', split_ratio=0.5)
+
+# 正常推理
+outputs = llm.generate(prompts, sampling_params)
 ```
 
-## 完整示例
+## 性能调优
 
-运行 `example_layer_device_management.py` 查看完整的使用示例，包括：
+### 自适应参数选择
 
-- 基本使用示例
-- 动态层设备管理
-- 运行时动态调整
-- 内存优化策略
+| Beta值 | 适用场景 |
+|--------|---------|
+| 0.1-0.2 | 稳定工作负载 |
+| 0.3-0.5 | 大多数场景（推荐） |
+| 0.6-1.0 | 动态变化负载 |
 
-## 性能建议
+### 最佳实践
 
-1. **减少设备切换**: 尽量将相邻的层放在同一设备上
-2. **合理分配**: 根据层的计算复杂度合理分配设备
-3. **监控内存**: 注意跨设备传输的内存开销
-4. **测试性能**: 在实际工作负载下测试性能影响
+1. **识别瓶颈层**：通常是Attention层和大型MLP层
+2. **副本设备选择**：确保与原层不在同一GPU
+3. **监控日志**：观察`time_a`和`time_b`，判断是否均衡
+4. **适用场景**：Prefill阶段效果最佳，大batch效果更明显
 
-## 注意事项
+## API参考
 
-1. **设备兼容性**: 确保目标GPU设备存在且可用
-2. **内存管理**: 跨设备传输会增加内存使用和传输开销
-3. **性能影响**: 频繁的设备切换可能影响性能
-4. **tensor同步**: 系统会自动处理tensor的设备同步
+### 层设备管理
+- `move_layer_to_device(layer_id, device)` - 移动单层
+- `set_layer_device_distribution(layer_device_map)` - 批量设置
+- `get_layer_device(layer_id)` - 查询设备
+
+### 层复制并行
+- `replicate_layer_to_device(layer_id, device, split_ratio=0.5)` - 创建副本
+- `enable_replication_autotune(layer_id, beta=0.2, min_ratio=0.1, max_ratio=0.9)` - 启用自适应
+- `update_replication_split_ratio(layer_id, split_ratio)` - 手动调整比例
+- `clear_layer_replication(layer_id=None)` - 清除配置
+- `disable_replication_autotune(layer_id)` - 禁用自适应
+
+## ⚠️ 注意事项
+
+- **内存开销**：层复制会占用额外显存
+- **KV Cache同步**：Decode阶段有同步开销
+- **设备选择**：副本必须在不同GPU才有效果
+- **Batch大小**：Batch越大，并行效果越明显
 
 
-
-## 贡献
+## 🤝 贡献
 
 欢迎提交Issue和Pull Request！
 
-## 参考
+## 📚 参考
 
 - [nanovllm](https://github.com/GeeeekExplorer/nanovllm)
 - [vLLM](https://github.com/vllm-project/vllm)
