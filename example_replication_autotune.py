@@ -8,7 +8,7 @@ def main():
     # 与 example.py 保持一致的加载方式
     path = os.path.expanduser("../Qwen3-0.6B")
     tokenizer = AutoTokenizer.from_pretrained(path)
-    llm = LLM(path, enforce_eager=True, tensor_parallel_size=1)
+    llm = LLM(path, enforce_eager=True, tensor_parallel_size=1,gpu_memory_utilization=0.6)
 
     # 配置第10层复制到GPU1，并开启自适应（需要>=2张GPU）
     try:
