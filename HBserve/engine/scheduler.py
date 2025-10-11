@@ -39,7 +39,12 @@ class Scheduler:
             self.waiting.popleft()
             self.running.append(seq) # 等待decode调度
             scheduled_seqs.append(seq) # 从prefill等待队列中取出进行prefill
+        
         if scheduled_seqs:
+            print("=="*20, "decode","=="*20)
+            print("scheduled_seqs len",len(scheduled_seqs))
+            print("scheduled_seqs",scheduled_seqs)
+            print("=="*50)
             return scheduled_seqs, True # 返回的是batch
 
         # decode
@@ -47,6 +52,7 @@ class Scheduler:
         # 或者当前的prefill已经满了，无法被调度，才会进行decode调度
         while self.running and num_seqs < self.max_num_seqs:
             seq = self.running.popleft() # 取出running队列的第一个序列
+            # print("running len", len(self.running))
             # 如果当前的block_manager不能append，则需要preempt
             while not self.block_manager.can_append(seq):
                 if self.running: # 如果有等待的，则驱逐最后一个，重新进行prefill
@@ -59,6 +65,10 @@ class Scheduler:
                 self.block_manager.may_append(seq)
                 scheduled_seqs.append(seq)
         assert scheduled_seqs
+        # print("=="*20, "decode","=="*20)
+        # print("scheduled_seqs len",len(scheduled_seqs))
+        # print("scheduled_seqs",scheduled_seqs)
+        # print("=="*50)
         self.running.extendleft(reversed(scheduled_seqs))
         return scheduled_seqs, False
 

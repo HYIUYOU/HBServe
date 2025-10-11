@@ -2,6 +2,18 @@
 
 基于vLLM实现的推理引擎，支持跨GPU层管理和并行执行优化。
 
+## 与其他服务对比
+
+| 特性 | HBserve | vLLM | Text-generation-inference |
+|-----|---------|------|--------------------------|
+| OpenAI API | ✅ | ✅ | ✅ |
+| 异步支持 | ✅ | ✅ | ✅ |
+| 层复制优化 | ✅ | ❌ | ❌ |
+| 跨GPU管理 | ✅ | ❌ | ❌ |
+| 自适应调优 | ✅ | ❌ | ❌ |
+
+
+
 ## 🔜 快速开始
 
 ### 命令行 cli
@@ -17,42 +29,195 @@ huggingface-cli download --resume-download Qwen/Qwen3-0.6B \
 # 3. 运行
 python example.py
 ```
-### OpenAI 兼容 API 服务
-HBserve 支持 OpenAI 兼容的 API 格式，方便集成现有应用。
+## 🌐 OpenAI 兼容 API 服务
 
-#### 启动服务器
+HBserve 提供 OpenAI 兼容的 REST API，支持异步并发处理和流式输出。
+
+### 启动服务器
+
 ```bash
 python openai_api_server.py \
-    --model-path ../Qwen3-0.6B \
+    --model-path ~/huggingface/Qwen3-0.6B \
     --port 8000 \
-    --gpu-memory-utilization 0.6
+    --gpu-memory-utilization 0.6 \
+    --enforce-eager
 ```
-#### API 端点
 
-- POST /v1/chat/completions - Chat 补全
-- POST /v1/completions - 文本补全
-- GET /v1/models - 列出模型
-- GET /health - 健康检查
+**启动参数：**
+- `--model-path`: 模型路径（必需）
+- `--host`: 绑定地址（默认：0.0.0.0）
+- `--port`: 端口号（默认：8000）
+- `--tensor-parallel-size`: 张量并行大小（默认：1）
+- `--gpu-memory-utilization`: GPU 内存利用率（默认：0.9）
+- `--enforce-eager`: 强制 eager 执行
 
-#### 客户端
+### API 端点
+
+| 端点 | 方法 | 说明 | 流式 |
+|-----|------|------|-----|
+| `/v1/chat/completions` | POST | Chat 对话补全 | ✅ |
+| `/v1/completions` | POST | 文本补全 | ✅ |
+| `/v1/models` | GET | 列出可用模型 | - |
+| `/health` | GET | 健康检查 | - |
+
+### 功能特性
+
+- ✅ **异步处理**：支持高并发请求
+- ✅ **流式输出**：Server-Sent Events (SSE) 格式
+- ✅ **OpenAI 兼容**：无缝对接 OpenAI SDK
+- ✅ **批量处理**：支持并发多个请求
+- ✅ **生命周期管理**：优雅启动和关闭
+
+### 客户端示例
+
+#### 同步调用
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="dummy")
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="dummy"  # HBserve 不需要认证
+)
 
+# Chat 补全
 response = client.chat.completions.create(
     model="Qwen3-0.6B",
-    messages=[{"role": "user", "content": "Hello!"}]
+    messages=[{"role": "user", "content": "Hello!"}],
+    temperature=0.7,
+    max_tokens=100
 )
 print(response.choices[0].message.content)
+
+# 流式输出
+stream = client.chat.completions.create(
+    model="Qwen3-0.6B",
+    messages=[{"role": "user", "content": "Tell me a story"}],
+    stream=True
+)
+
+for chunk in stream:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
 ```
 
-或者你可以使用我们提供的用例：
+#### 异步调用（高并发）
+
+```python
+import asyncio
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="dummy"
+)
+
+async def main():
+    # 并发处理多个请求
+    tasks = [
+        client.chat.completions.create(
+            model="Qwen3-0.6B",
+            messages=[{"role": "user", "content": f"What is {i}+{i}?"}],
+            max_tokens=50
+        )
+        for i in range(5)
+    ]
+    
+    responses = await asyncio.gather(*tasks)
+    
+    for i, response in enumerate(responses):
+        print(f"Request {i}: {response.choices[0].message.content}")
+
+asyncio.run(main())
+```
+
+#### 使用 curl
 
 ```bash
-python example_api.py
+# Chat 补全
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen3-0.6B",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "temperature": 0.7,
+    "max_tokens": 100
+  }'
+
+# 流式输出
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen3-0.6B",
+    "messages": [{"role": "user", "content": "Count to 5"}],
+    "stream": true
+  }'
 ```
+
+### 测试脚本
+
+我们提供了完整的测试示例：
+
+```bash
+# 基础测试（同步）
+python example_api.py
+
+# 异步并发测试
+python example_api_async.py
+
+# 性能基准测试
+python benchmark_api.py
+```
+
+**测试输出示例：**
+```
+============================================================
+  🚀 HBserve OpenAI-Compatible API Tests (Async)
+============================================================
+
+✅ Server Status: ok
+   Engine Running: True
+
+============================================================
+  Test 1: Chat Completion
+============================================================
+
+🔹 Testing Chat Completion...
+✅ Response (0.63s):
+   <think>
+Okay, the user asked...
+```
+
+### 支持的参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|-----|------|--------|------|
+| `temperature` | float | 1.0 | 采样温度 |
+| `max_tokens` | int | 64 | 最大生成长度 |
+| `stream` | bool | false | 是否流式输出 |
+| `messages` | array | - | 对话消息列表 |
+| `prompt` | string | - | 文本提示（completions） |
+
+⚠️ **注意**：`top_p`、`n`、`stop` 等参数会被接受但不生效，因为底层引擎暂不支持。
+
+
+### 架构说明
+
+```
+客户端请求 → FastAPI 异步端点 → AsyncLLMEngine
+                                      ↓
+                              后台推理循环（持续运行）
+                                      ↓
+                              LLMEngine.step()
+                                      ↓
+                              返回结果到客户端
+```
+
+**关键特性**：
+- 请求提交和推理执行解耦
+- 后台持续运行推理循环
+- 通过 `asyncio.Queue` 传递结果
+- 支持动态添加请求
 
 
 ## 📦 核心功能
@@ -163,3 +328,6 @@ outputs = llm.generate(prompts, sampling_params)
 - [nanovllm](https://github.com/GeeeekExplorer/nanovllm)
 - [vLLM](https://github.com/vllm-project/vllm)
 - [Mooncake](https://github.com/kvcache-ai/Mooncake)
+- [OpenAI API](https://platform.openai.com/docs/api-reference)
+- [FastAPI](https://fastapi.tiangolo.com/)
+- [AsyncOpenAI](https://github.com/openai/openai-python#async-usage)
