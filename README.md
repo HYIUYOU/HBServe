@@ -411,47 +411,6 @@ sampling_params = SamplingParams(temperature=0.7, max_tokens=100)
 outputs = llm.generate(prompts, sampling_params)
 ```
 
-## 📈 性能基准
-
-### 基准测试结果
-
-**测试环境：**
-- 硬件：RTX 4070 Laptop (8GB)
-- 模型：Qwen3-0.6B
-- 请求数：256个序列
-- 输入长度：100-1024 tokens（随机采样）
-- 输出长度：100-1024 tokens（随机采样）
-
-| 推理引擎 | 输出Tokens | 时间(s) | 吞吐量(tokens/s) |
-|---------|-----------|---------|-----------------|
-| vLLM    | 133,966   | 98.37   | 1361.84         |
-| HBserve | 133,966   | 93.41   | 1434.13         |
-
-**性能提升：** HBserve相比vLLM提升约 **5.3%** 的吞吐量。
-
-### 运行基准测试
-
-```bash
-# 基础性能测试
-python banchmark.py
-
-# API性能测试
-python example_api_async.py
-
-# 层管理性能测试
-python quick_start_layer_management.py
-```
-
-## ⚙️ 性能调优
-
-### 自适应参数选择
-
-| Beta值 | 适用场景 | 说明 |
-|--------|---------|------|
-| 0.1-0.2 | 稳定工作负载 | 保守调优，变化缓慢 |
-| 0.3-0.5 | 大多数场景（推荐） | 平衡响应性和稳定性 |
-| 0.6-1.0 | 动态变化负载 | 快速响应负载变化 |
-
 ### 最佳实践
 
 1. **识别瓶颈层**：使用`HB_DEBUG=1`监控各层耗时，通常是Attention层和大型MLP层
