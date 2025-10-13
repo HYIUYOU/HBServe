@@ -10,7 +10,9 @@ import os
 import torch
 from HBserve import LLM, SamplingParams
 from transformers import AutoTokenizer
-
+os.environ['HB_ATTN_OFFLOAD_LOG'] = '0'
+os.environ['HB_DEBUG'] = '0'  # 不启用 attention 调试日志
+os.environ['HB_REPLICA_LOG'] = '0'
 
 def example_basic_usage():
     """示例：基本使用 - 加载模型并进行推理"""
