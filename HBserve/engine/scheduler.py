@@ -41,10 +41,6 @@ class Scheduler:
             scheduled_seqs.append(seq) # 从prefill等待队列中取出进行prefill
         
         if scheduled_seqs:
-            print("=="*20, "decode","=="*20)
-            print("scheduled_seqs len",len(scheduled_seqs))
-            print("scheduled_seqs",scheduled_seqs)
-            print("=="*50)
             return scheduled_seqs, True # 返回的是batch
 
         # decode
