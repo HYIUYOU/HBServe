@@ -1,6 +1,7 @@
-# 💻 HBserve
 
-基于vLLM实现的轻量级推理引擎，支持跨GPU层管理、并行执行优化和注意力卸载。
+<h1 align="center">💻 HBserve</h1>
+<p align="center">基于vLLM实现的轻量级推理引擎，支持跨GPU层管理、并行执行优化和注意力卸载。</p>
+
 
 ## ✨ 核心特性
 
@@ -575,7 +576,7 @@ python example_api_async.py
 
 <div align="center">
 
-**⭐ 如果这个项目对您有帮助，请给我们一个Star！**
+**⭐ 如果这个项目对您有帮助，请给我们一个 Star！**
 
 [GitHub](https://github.com/HYIUYOU/HBServe) • [Issues](https://github.com/HYIUYOU/HBServe/issues) • [Pull Requests](https://github.com/HYIUYOU/HBServe/pulls)
 
