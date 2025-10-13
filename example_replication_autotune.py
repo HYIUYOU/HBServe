@@ -1,8 +1,11 @@
+# HB_REPLICA_LOG = 1 python example_replication_autotune.py
 import os
 from HBserve import LLM, SamplingParams
 from transformers import AutoTokenizer
 import torch
-
+os.environ['HB_ATTN_OFFLOAD_LOG'] = '0'
+os.environ['HB_DEBUG'] = '0'  # 不启用 attention 调试日志
+os.environ['HB_REPLICA_LOG'] = '0'
 
 def main():
     # 与 example.py 保持一致的加载方式
@@ -19,8 +22,7 @@ def main():
                 # 第10层索引为 9
                 model.replicate_layer_to_device(9, 'cuda:1', split_ratio=0.5)
                 model.enable_replication_autotune(9, beta=0.3, min_ratio=0.2, max_ratio=0.8)
-                # 可选日志：启用自适应日志打印
-                os.environ.setdefault("HB_REPLICA_LOG", "1")
+                
         else:
             print("警告: 需要至少2张GPU来演示复制并行，自适应功能将跳过。")
     except Exception as e:

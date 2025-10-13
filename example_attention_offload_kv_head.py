@@ -1,7 +1,8 @@
 import os
 from HBserve import LLM, SamplingParams
 from transformers import AutoTokenizer
-
+os.environ['HB_ATTN_OFFLOAD_LOG'] = '0'
+os.environ['HB_DEBUG'] = '0'  # 不启用 attention 调试日志
 
 def main():
     path = os.path.expanduser("../Qwen3-0.6B")
