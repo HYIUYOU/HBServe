@@ -255,6 +255,55 @@ model.enable_replication_autotune(9, beta=0.3, min_ratio=0.2, max_ratio=0.8)
 
 **工作原理**：将batch切分到原始层（GPU0）和副本层（GPU1）并行计算，自动根据两侧耗时调整切分比例。
 
+### 🧠 Attention Offload（注意力卸载）
+针对Attention层的特殊优化，支持两种卸载策略，解决大模型注意力计算的内存和计算瓶颈。
+
+#### 1. Batch Offload（批次卸载）
+将attention计算按batch维度切分到不同GPU，适合大batch场景。
+
+```python
+# 基础用法
+model.attention_offload_by_batch(
+    layer_id=9,
+    offload_device='cuda:1',
+    split_ratio=0.5,
+    enable_autotune=False
+)
+
+# 启用自适应调优
+model.attention_offload_by_batch(
+    layer_id=9,
+    offload_device='cuda:1',
+    split_ratio=0.5,
+    enable_autotune=True
+)
+```
+
+#### 2. KV Head Split（KV头分离）
+将attention的K、V头分配到不同GPU，适合多头注意力场景。
+
+```python
+# 基础用法
+model.attention_offload_by_kv_head(
+    layer_id=9,
+    offload_device='cuda:1',
+    split_kv_head_idx=None,  # None = 均分
+    enable_autotune=False
+)
+
+# 指定头分离
+model.attention_offload_by_kv_head(
+    layer_id=9,
+    offload_device='cuda:1',
+    split_kv_head_idx=[0, 1, 2],  # 指定哪些头在offload设备
+    enable_autotune=True
+)
+```
+
+**工作原理**：
+- **Batch Offload**：将输入batch按比例分配到两个GPU，并行计算attention
+- **KV Head Split**：将attention的K、V矩阵按头维度分离，减少单GPU内存占用
+
 ## 使用示例
 
 ```python
@@ -275,6 +324,10 @@ model.enable_replication_autotune(9, beta=0.3)
 # 方案3: 组合使用
 model.set_layer_device_distribution({15: 'cuda:1'})
 model.replicate_layer_to_device(9, 'cuda:2', split_ratio=0.5)
+
+# 方案4: Attention Offload
+model.attention_offload_by_batch(9, 'cuda:1', split_ratio=0.5)
+model.attention_offload_by_kv_head(10, 'cuda:2', split_kv_head_idx=None)
 
 # 正常推理
 outputs = llm.generate(prompts, sampling_params)
@@ -311,12 +364,19 @@ outputs = llm.generate(prompts, sampling_params)
 - `clear_layer_replication(layer_id=None)` - 清除配置
 - `disable_replication_autotune(layer_id)` - 禁用自适应
 
+### Attention Offload
+- `attention_offload_by_batch(layer_id, offload_device, split_ratio=0.5, enable_autotune=False)` - 批次卸载
+- `attention_offload_by_kv_head(layer_id, offload_device, split_kv_head_idx=None, enable_autotune=False)` - KV头分离
+- `clear_attention_offload(layer_id)` - 清除attention offload配置
+
 ## ⚠️ 注意事项
 
 - **内存开销**：层复制会占用额外显存
 - **KV Cache同步**：Decode阶段有同步开销
 - **设备选择**：副本必须在不同GPU才有效果
 - **Batch大小**：Batch越大，并行效果越明显
+- **Attention Offload**：仅适用于attention层，需要至少2张GPU
+- **调试日志**：设置`HB_ATTN_OFFLOAD_LOG=1`查看详细日志
 
 
 ## 🤝 贡献
