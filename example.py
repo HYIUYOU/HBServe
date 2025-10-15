@@ -4,9 +4,9 @@ from transformers import AutoTokenizer
 
 
 def main():
-    path = os.path.expanduser("../Qwen3-0.6B")
+    path = os.path.expanduser("/home/admin/workspace/aop_lab/app_data/.cache/models--meta-llama--Meta-Llama-3-8B-Instruct/snapshots/8afb486c1db24fe5011ec46dfbe5b5dccdb575c2")
     tokenizer = AutoTokenizer.from_pretrained(path)
-    llm = LLM(path, enforce_eager=True, tensor_parallel_size=1, gpu_memory_utilization=0.6)
+    llm = LLM(path, enforce_eager=False, tensor_parallel_size=1, gpu_memory_utilization=0.9)
 
     sampling_params = SamplingParams(temperature=0.6, max_tokens=256)
     prompts = [

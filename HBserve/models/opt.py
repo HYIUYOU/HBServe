@@ -1,5 +1,5 @@
 """
-Qwen3 模型实现 - 使用 Mixin 模式重构
+OPT 模型实现 - 使用 Mixin 模式重构
 支持层迁移、层复制、Attention Offload 等优化功能
 """
 
@@ -7,7 +7,7 @@ import torch
 import copy
 from torch import nn
 import torch.distributed as dist
-from transformers import Qwen3Config
+from transformers import OPTConfig
 from typing import Tuple, Optional
 
 from HBserve.layers.activation import SiluAndMul
@@ -28,7 +28,8 @@ from HBserve.utils.optimization_forward import (
 
 from HBserve.models import register_model  # ← 导入装饰器
 
-class Qwen3Attention(nn.Module):
+
+class OPTAttention(nn.Module):
 
     def __init__(
         self,
@@ -88,21 +89,21 @@ class Qwen3Attention(nn.Module):
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
-        qkv = self.qkv_proj(hidden_states) # 注意这里的hidden_states 不包含prefix caching命中的部分
-        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1) # q，k，v都不包含prefix caching命中的部分
+        qkv = self.qkv_proj(hidden_states)
+        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q_by_head = q.view(-1, self.num_heads, self.head_dim)
         q_by_head = self.q_norm(q_by_head)
         q = q_by_head.view(q.shape)
         k_by_head = k.view(-1, self.num_kv_heads, self.head_dim)
         k_by_head = self.k_norm(k_by_head)
         k = k_by_head.view(k.shape)
-        q, k = self.rotary_emb(positions, q, k) # 根据position进行旋转位置编码，因为RoPE为绝对位置编码，因此可以这么做
-        o = self.attn(q, k, v) # 将q，k，v（不包含prefix caching命中的部分）传入attention计算
+        q, k = self.rotary_emb(positions, q, k)
+        o = self.attn(q, k, v)
         output = self.o_proj(o)
         return output
 
 
-class Qwen3MLP(nn.Module):
+class OPTMLP(nn.Module):
 
     def __init__(
         self,
@@ -121,7 +122,7 @@ class Qwen3MLP(nn.Module):
             hidden_size,
             bias=False,
         )
-        assert hidden_act == "silu"
+        assert hidden_act == "relu"  # ← OPT 使用 relu，不是 silu
         self.act_fn = SiluAndMul()
 
     def forward(self, x):
@@ -131,14 +132,14 @@ class Qwen3MLP(nn.Module):
         return x
 
 
-class Qwen3DecoderLayer(nn.Module):
+class OPTDecoderLayer(nn.Module):
 
     def __init__(
         self,
-        config: Qwen3Config,
+        config: OPTConfig,
     ) -> None:
         super().__init__()
-        self.self_attn = Qwen3Attention(
+        self.self_attn = OPTAttention(
             hidden_size=config.hidden_size,
             num_heads=config.num_attention_heads,
             num_kv_heads=config.num_key_value_heads,
@@ -146,13 +147,13 @@ class Qwen3DecoderLayer(nn.Module):
             rms_norm_eps=config.rms_norm_eps,
             qkv_bias=getattr(config, 'attention_bias', False),
             head_dim=getattr(config, 'head_dim', None),
-            rope_theta=getattr(config, "rope_theta", 1000000),
+            rope_theta=getattr(config, "rope_theta", 10000),
             rope_scaling=getattr(config, "rope_scaling", None),
         )
-        self.mlp = Qwen3MLP(
+        self.mlp = OPTMLP(
             hidden_size=config.hidden_size,
-            intermediate_size=config.intermediate_size,
-            hidden_act=config.hidden_act,
+            intermediate_size=config.ffn_dim,  # ← OPT 用 ffn_dim，不是 intermediate_size
+            hidden_act=config.activation_function,  # ← OPT 用 activation_function
         )
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -163,20 +164,20 @@ class Qwen3DecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         residual: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        if residual is None: # 第一次计算，没有残差
+        if residual is None:
             residual = hidden_states
-            hidden_states = self.input_layernorm(hidden_states) # 这里的hidden_states 不包含prefix caching命中的部分
+            hidden_states = self.input_layernorm(hidden_states)
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
-        hidden_states = self.self_attn(positions, hidden_states) # 将positions传入attention计算
+        hidden_states = self.self_attn(positions, hidden_states)
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
         return hidden_states, residual
 
 
-class Qwen3Model(ModelOptimizationMixin, nn.Module):
+class OPTModel(ModelOptimizationMixin, nn.Module):
     """
-    Qwen3 模型 - 使用 Mixin 模式重构
+    OPT 模型 - 使用 Mixin 模式重构
     
     继承 ModelOptimizationMixin 后，自动获得以下优化功能：
     1. 层设备管理（move_layer_to_device, get_layer_device 等）
@@ -186,7 +187,7 @@ class Qwen3Model(ModelOptimizationMixin, nn.Module):
 
     def __init__(
         self,
-        config: Qwen3Config,
+        config: OPTConfig,
     ) -> None:
         # 先初始化 nn.Module
         nn.Module.__init__(self)
@@ -196,7 +197,7 @@ class Qwen3Model(ModelOptimizationMixin, nn.Module):
         self.config = config
         self.embed_tokens = VocabParallelEmbedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([
-            Qwen3DecoderLayer(config) 
+            OPTDecoderLayer(config) 
             for _ in range(config.num_hidden_layers)
         ])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -205,11 +206,11 @@ class Qwen3Model(ModelOptimizationMixin, nn.Module):
     
     def _create_decoder_layer(self):
         """创建一个新的 decoder layer 实例（LayerReplicationMixin 需要）"""
-        return Qwen3DecoderLayer(self.config)
+        return OPTDecoderLayer(self.config)
     
     def _create_attention_module(self):
         """创建一个新的 attention 模块实例（AttentionOffloadMixin 需要）"""
-        return Qwen3Attention(
+        return OPTAttention(
             hidden_size=self.config.hidden_size,
             num_heads=self.config.num_attention_heads,
             num_kv_heads=self.config.num_key_value_heads,
@@ -217,7 +218,7 @@ class Qwen3Model(ModelOptimizationMixin, nn.Module):
             rms_norm_eps=self.config.rms_norm_eps,
             qkv_bias=getattr(self.config, 'attention_bias', False),
             head_dim=getattr(self.config, 'head_dim', None),
-            rope_theta=getattr(self.config, "rope_theta", 1000000),
+            rope_theta=getattr(self.config, "rope_theta", 10000),
             rope_scaling=getattr(self.config, "rope_scaling", None),
         )
 
@@ -381,8 +382,10 @@ class Qwen3Model(ModelOptimizationMixin, nn.Module):
             self.get_layer_device(layer_id),
             self._sync_kv_cache_for_decode
         )
-@register_model("qwen3") 
-class Qwen3ForCausalLM(nn.Module):
+
+
+@register_model("opt")
+class OPTForCausalLM(nn.Module):
     packed_modules_mapping = {
         "q_proj": ("qkv_proj", "q"),
         "k_proj": ("qkv_proj", "k"),
@@ -393,20 +396,75 @@ class Qwen3ForCausalLM(nn.Module):
 
     def __init__(
         self,
-        config: Qwen3Config
+        config: OPTConfig
     ) -> None:
         super().__init__()
-        self.model = Qwen3Model(config)
+        
+        # ========== 关键添加：标准化 OPT 配置 ==========
+        self._standardize_config(config)
+        
+        self.config = config
+        self.model = OPTModel(config)
         self.lm_head = ParallelLMHead(config.vocab_size, config.hidden_size)
         if config.tie_word_embeddings:
             self.lm_head.weight.data = self.model.embed_tokens.weight.data
+
+    @staticmethod
+    def _standardize_config(config: OPTConfig):
+        """
+        标准化 OPT 配置，添加缺失的属性
+        使其与 Qwen3 等模型的配置格式兼容
+        """
+        print("🔧 标准化 OPT 配置...")
+        
+        # 1. num_key_value_heads (OPT 使用 MHA，没有这个属性)
+        if not hasattr(config, 'num_key_value_heads'):
+            config.num_key_value_heads = config.num_attention_heads
+            print(f"  ✓ 设置 num_key_value_heads = {config.num_key_value_heads} (MHA)")
+        
+        # 2. head_dim
+        if not hasattr(config, 'head_dim'):
+            config.head_dim = config.hidden_size // config.num_attention_heads
+            print(f"  ✓ 计算 head_dim = {config.head_dim}")
+        
+        # 3. intermediate_size (OPT 使用 ffn_dim)
+        if not hasattr(config, 'intermediate_size'):
+            config.intermediate_size = config.ffn_dim
+            print(f"  ✓ 设置 intermediate_size = {config.intermediate_size} (from ffn_dim)")
+        
+        # 4. hidden_act (OPT 使用 activation_function)
+        if not hasattr(config, 'hidden_act'):
+            config.hidden_act = config.activation_function
+            print(f"  ✓ 设置 hidden_act = {config.hidden_act}")
+        
+        # 5. rope_theta (OPT 可能不使用 RoPE，但为了兼容性添加)
+        if not hasattr(config, 'rope_theta'):
+            config.rope_theta = 10000.0
+            print(f"  ✓ 设置 rope_theta = {config.rope_theta} (默认值)")
+        
+        # 6. rope_scaling
+        if not hasattr(config, 'rope_scaling'):
+            config.rope_scaling = None
+        
+        # 7. rms_norm_eps (OPT 可能使用 layer_norm_eps)
+        if not hasattr(config, 'rms_norm_eps'):
+            # OPT 通常没有这个字段，使用默认值
+            config.rms_norm_eps = 1e-6
+            print(f"  ✓ 设置 rms_norm_eps = {config.rms_norm_eps} (默认值)")
+        
+        # 8. attention_bias (OPT 使用 enable_bias)
+        if not hasattr(config, 'attention_bias'):
+            config.attention_bias = getattr(config, 'enable_bias', False)
+            print(f"  ✓ 设置 attention_bias = {config.attention_bias}")
+        
+        print("✅ OPT 配置标准化完成")
 
     def forward(
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
     ) -> torch.Tensor:
-        hidden_states = self.model(input_ids, positions) # 注意这里的input_ids不包含prefix caching命中的部分
+        hidden_states = self.model(input_ids, positions)
         return hidden_states
 
     def compute_logits(
@@ -418,118 +476,3 @@ class Qwen3ForCausalLM(nn.Module):
             self.lm_head = self.lm_head.to(hidden_device)
         logits = self.lm_head(hidden_states)
         return logits
-
-
-# # ========== 便捷函数：用于模型优化配置 ==========
-
-# def configure_model_optimization(
-#     model: Qwen3ForCausalLM,
-#     device_map: Optional[dict] = None,
-#     replication_config: Optional[dict] = None,
-#     attention_offload_config: Optional[dict] = None
-# ) -> None:
-#     """
-#     便捷函数：配置模型优化
-    
-#     Args:
-#         model: Qwen3ForCausalLM 模型
-#         device_map: 层到设备的映射，例如 {0: 'cuda:0', 1: 'cuda:1'}
-#         replication_config: 层复制配置，例如 {5: {'device': 'cuda:1', 'ratio': 0.6}}
-#         attention_offload_config: Attention offload 配置
-    
-#     Example:
-#         >>> model = Qwen3ForCausalLM(config)
-#         >>> configure_model_optimization(
-#         ...     model,
-#         ...     device_map={0: 'cuda:0', 1: 'cuda:0', 2: 'cuda:1'},
-#         ...     replication_config={5: {'device': 'cuda:2', 'ratio': 0.6}},
-#         ...     attention_offload_config={10: {'device': 'cuda:3', 'type': 'kv_head'}}
-#         ... )
-#     """
-#     qwen_model = model.model
-    
-#     # 1. 配置设备分布
-#     if device_map:
-#         qwen_model.set_layer_device_distribution(device_map)
-    
-#     # 2. 配置层复制
-#     if replication_config:
-#         for layer_id, cfg in replication_config.items():
-#             qwen_model.replicate_layer_to_device(
-#                 layer_id=layer_id,
-#                 device=cfg['device'],
-#                 split_ratio=cfg.get('ratio', 0.5)
-#             )
-#             if cfg.get('autotune', False):
-#                 qwen_model.enable_replication_autotune(
-#                     layer_id=layer_id,
-#                     beta=cfg.get('beta', 0.2),
-#                     min_ratio=cfg.get('min_ratio', 0.1),
-#                     max_ratio=cfg.get('max_ratio', 0.9)
-#                 )
-    
-#     # 3. 配置 Attention offload
-#     if attention_offload_config:
-#         for layer_id, cfg in attention_offload_config.items():
-#             offload_type = cfg.get('type', 'batch')
-#             if offload_type == 'kv_head':
-#                 qwen_model.attention_offload_by_kv_head(
-#                     layer_id=layer_id,
-#                     offload_device=cfg['device'],
-#                     split_kv_head_idx=cfg.get('split_idx'),
-#                     enable_autotune=cfg.get('autotune', False),
-#                     autotune_beta=cfg.get('beta', 0.3)
-#                 )
-#             else:  # batch
-#                 qwen_model.attention_offload_by_batch(
-#                     layer_id=layer_id,
-#                     offload_device=cfg['device'],
-#                     split_ratio=cfg.get('ratio', 0.5),
-#                     enable_autotune=cfg.get('autotune', False),
-#                     autotune_beta=cfg.get('beta', 0.3)
-#                 )
-
-
-# # ========== 使用示例 ==========
-
-# if __name__ == "__main__":
-#     # 创建模型
-#     config = Qwen3Config()
-#     model = Qwen3ForCausalLM(config)
-    
-#     # 方式 1: 直接使用 API
-#     model.model.move_layer_to_device(0, 'cuda:0')
-#     model.model.replicate_layer_to_device(5, 'cuda:1', split_ratio=0.6)
-#     model.model.attention_offload_by_kv_head(10, 'cuda:2')
-    
-#     # 方式 2: 使用配置函数
-#     configure_model_optimization(
-#         model,
-#         device_map={
-#             0: 'cuda:0',
-#             1: 'cuda:0',
-#             2: 'cuda:1',
-#             3: 'cuda:1',
-#         },
-#         replication_config={
-#             5: {
-#                 'device': 'cuda:2',
-#                 'ratio': 0.6,
-#                 'autotune': True,
-#                 'beta': 0.2
-#             }
-#         },
-#         attention_offload_config={
-#             10: {
-#                 'device': 'cuda:3',
-#                 'type': 'kv_head',
-#                 'split_idx': 4,
-#                 'autotune': True
-#             }
-#         }
-#     )
-    
-#     print("Qwen3 模型配置完成！")
-#     print(f"层数: {len(model.model.layers)}")
-#     print(f"复制的层: {list(model.model.replicas.keys())}")
-#     print(f"Attention offload 的层: {list(model.model.attention_offload.keys())}")
