@@ -256,7 +256,7 @@ Okay, the user asked...
 将不同层分配到不同GPU，解决单卡内存不足问题。
 
 ```python
-model = llm.model.model
+model = llm.model_runner.model.model
 
 # 单层移动
 model.move_layer_to_device(9, 'cuda:1')
@@ -273,6 +273,7 @@ model.set_layer_device_distribution({
 将瓶颈层复制到另一GPU，batch切分并行执行，提升吞吐量。
 
 ```python
+model = llm.model_runner.model.model
 # 基础用法
 model.replicate_layer_to_device(9, 'cuda:1', split_ratio=0.5)
 
@@ -385,7 +386,7 @@ os.environ['HB_REPLICA_LOG'] = '1'
 os.environ['HB_ATTN_OFFLOAD_LOG'] = '1'
 
 llm = LLM(model_path, enforce_eager=True)
-model = llm.model.model
+model = llm.model_runner.model.model
 
 # 方案1: 层分布（解决内存问题）
 model.set_layer_device_distribution({
@@ -432,7 +433,7 @@ outputs = llm.generate(prompts, sampling_params)
 
 **示例：**
 ```python
-model = llm.model.model
+model = llm.model_runner.model.model
 
 # 单层移动
 model.move_layer_to_device(9, 'cuda:1')
@@ -512,25 +513,47 @@ model.clear_attention_offload(9)
 
 ```
 HBServe/
-├── HBserve/                    # 核心库
-│   ├── engine/                 # 推理引擎
-│   │   ├── async_llm_engine.py # 异步引擎
-│   │   ├── llm_engine.py       # 主引擎
-│   │   ├── model_runner.py     # 模型运行器
-│   │   └── scheduler.py         # 调度器
-│   ├── layers/                 # 神经网络层
-│   │   ├── attention.py        # 注意力层
-│   │   ├── linear.py          # 线性层
-│   │   └── rotary_embedding.py # 旋转位置编码
-│   ├── models/                 # 模型定义
-│   │   └── qwen3.py           # Qwen3模型
-│   └── utils/                  # 工具函数
-├── example.py                   # 基础示例
-├── example_api.py              # API同步示例
-├── example_api_async.py        # API异步示例
-├── banchmark.py               # 性能基准测试
-├── openai_api_server.py       # OpenAI API服务器
-└── quick_start_layer_management.py # 层管理快速开始
+├── HBserve/                           # 核心库
+│   ├── __init__.py                    # 包初始化
+│   ├── config.py                      # 配置管理
+│   ├── llm.py                         # LLM主接口
+│   ├── sampling_params.py             # 采样参数
+│   ├── engine/                        # 推理引擎
+│   │   ├── async_llm_engine.py        # 异步引擎
+│   │   ├── block_manager.py           # 块管理器
+│   │   ├── llm_engine.py              # 主引擎
+│   │   ├── model_runner.py            # 模型运行器
+│   │   ├── scheduler.py               # sequence调度器
+│   │   └── sequence.py                # 序列管理
+│   ├── layers/                        # 神经网络层
+│   │   ├── activation.py              # 激活函数
+│   │   ├── attention.py               # 注意力层
+│   │   ├── embed_head.py              # 嵌入头
+│   │   ├── layernorm.py               # 层归一化
+│   │   ├── linear.py                  # 线性层
+│   │   ├── rotary_embedding.py        # 旋转位置编码
+│   │   └── sampler.py                 # 采样器
+│   ├── models/                        # 模型定义
+│   │   └── qwen3.py                   # Qwen3模型
+│   └── utils/                         # 工具函数
+│       ├── context.py                 # 上下文管理
+│       ├── loader.py                  # 模型加载器
+│       ├── model_ops.py               # 模型操作
+│       └── optimization_forward.py    # 优化前向传播
+├── example.py                         # 基础示例
+├── example_api.py                     # API同步示例
+├── example_api_async.py               # API异步示例
+├── example_attention_offload_batch.py # 注意力批次卸载示例
+├── example_attention_offload_kv_head.py # 注意力KV头卸载示例
+├── example_migration.py               # 迁移示例
+├── example_replication_autotune.py    # 复制自适应调优示例
+├── banchmark.py                       # 性能基准测试
+├── openai_api_server.py               # OpenAI API服务器
+├── quick_start_layer_management.py    # 层管理快速开始
+├── test.py                            # 测试脚本
+├── pyproject.toml                     # 项目配置
+├── LICENSE                            # 许可证
+└── README.md                          # 项目说明
 ```
 
 ## 🤝 贡献
