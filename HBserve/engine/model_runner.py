@@ -7,10 +7,11 @@ from multiprocessing.shared_memory import SharedMemory
 from HBserve.config import Config
 from HBserve.engine.sequence import Sequence
 from HBserve.models.qwen3 import Qwen3ForCausalLM
+from HBserve.models.opt import OPTForCausalLM
 from HBserve.layers.sampler import Sampler
 from HBserve.utils.context import set_context, get_context, reset_context
 from HBserve.utils.loader import load_model
-
+from HBserve.models import create_model_from_config
 
 class ModelRunner:
 
@@ -28,7 +29,8 @@ class ModelRunner:
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(hf_config.torch_dtype)
         torch.set_default_device("cuda")
-        self.model = Qwen3ForCausalLM(hf_config)
+        # self.model = Qwen3ForCausalLM(hf_config)
+        self.model = create_model_from_config(hf_config)
         load_model(self.model, config.model)
         self.sampler = Sampler()
         self.warmup_model()
