@@ -1,0 +1,740 @@
+"""
+优化前向传播的执行逻辑
+将复杂的执行逻辑从模型类中分离出来
+"""
+
+import torch
+import os
+from torch import nn
+from typing import Dict, Optional, Callable
+from HBserve.utils.context import get_context, set_context, Context
+
+
+def execute_kv_head_split_forward(
+    layer_id: int,
+    layer: nn.Module,
+    positions: torch.Tensor,
+    hidden_states: torch.Tensor,
+    context: Context,
+    config: Dict
+) -> torch.Tensor:
+    """
+    执行按 KV Head 切分的 Attention 计算
+    
+    Args:
+        layer_id: 层索引
+        layer: 当前层
+        positions: 位置张量
+        hidden_states: 隐藏状态
+        context: 上下文
+        config: KV Head Split 配置
+    
+    Returns:
+        Attention 输出
+    """
+    from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+    from HBserve.layers.attention import store_kvcache
+    
+    DEBUG = os.environ.get("HB_DEBUG", "0") != "0"
+    
+    src_device = config['src_device']
+    offload_device = config['offload_device']
+    split_q_head_idx = config['split_q_head_idx']
+    split_kv_head_idx = config['split_kv_head_idx']
+    
+    # 确保输入在原设备
+    if hidden_states.device != src_device:
+        hidden_states = hidden_states.to(src_device)
+    if positions.device != src_device:
+        positions = positions.to(src_device)
+    
+    # 处理输入维度
+    is_prefill = context.is_prefill
+    if hidden_states.dim() == 2:
+        batch_size = hidden_states.size(0)
+        seq_len = 1
+        hidden_size = hidden_states.size(1)
+        hidden_states = hidden_states.unsqueeze(1)
+    elif hidden_states.dim() == 3:
+        batch_size, seq_len, hidden_size = hidden_states.shape
+    else:
+        raise ValueError(f"Unexpected hidden_states shape: {hidden_states.shape}")
+    
+    # 初始化分片 cache（仅在第一次 decode 时）
+    if not is_prefill and not config['cache_initialized']:
+        _init_split_kv_cache(layer_id, config)
+    
+    # === QKV Projection ===
+    qkv_0 = torch.nn.functional.linear(
+        hidden_states, config['qkv_weight_0'], config['qkv_bias_0']
+    )
+    hs_1 = hidden_states.to(offload_device)
+    qkv_1 = torch.nn.functional.linear(
+        hs_1, config['qkv_weight_1'], config['qkv_bias_1']
+    )
+    
+    # === 分离 Q, K, V ===
+    num_heads_0 = split_q_head_idx
+    num_kv_heads_0 = split_kv_head_idx
+    num_heads_1 = config['src_attn'].num_heads - split_q_head_idx
+    num_kv_heads_1 = config['num_kv_heads_1']
+    head_dim = config['head_dim']
+    
+    q_size_0 = num_heads_0 * head_dim
+    kv_size_0 = num_kv_heads_0 * head_dim
+    q_size_1 = num_heads_1 * head_dim
+    kv_size_1 = num_kv_heads_1 * head_dim
+    
+    # Device 0
+    q_0, k_0, v_0 = qkv_0.split([q_size_0, kv_size_0, kv_size_0], dim=-1)
+    q_0 = q_0.view(batch_size, seq_len, num_heads_0, head_dim)
+    k_0 = k_0.view(batch_size, seq_len, num_kv_heads_0, head_dim)
+    v_0 = v_0.view(batch_size, seq_len, num_kv_heads_0, head_dim)
+    
+    # Device 1
+    q_1, k_1, v_1 = qkv_1.split([q_size_1, kv_size_1, kv_size_1], dim=-1)
+    q_1 = q_1.view(batch_size, seq_len, num_heads_1, head_dim)
+    k_1 = k_1.view(batch_size, seq_len, num_kv_heads_1, head_dim)
+    v_1 = v_1.view(batch_size, seq_len, num_kv_heads_1, head_dim)
+    
+    # === RMS Norm ===
+    q_norm_weight = config['q_norm_weight'].to(src_device)
+    k_norm_weight = config['k_norm_weight'].to(src_device)
+    
+    q_0 = torch.nn.functional.rms_norm(q_0, (head_dim,), q_norm_weight, eps=1e-6)
+    k_0 = torch.nn.functional.rms_norm(k_0, (head_dim,), k_norm_weight, eps=1e-6)
+    
+    q_norm_weight_1 = q_norm_weight.to(offload_device)
+    k_norm_weight_1 = k_norm_weight.to(offload_device)
+    q_1 = torch.nn.functional.rms_norm(q_1, (head_dim,), q_norm_weight_1, eps=1e-6)
+    k_1 = torch.nn.functional.rms_norm(k_1, (head_dim,), k_norm_weight_1, eps=1e-6)
+    
+    # === RoPE ===
+    rotary_emb = config['rotary_emb']
+    
+    q_0 = q_0.view(batch_size * seq_len, num_heads_0, head_dim)
+    k_0 = k_0.view(batch_size * seq_len, num_kv_heads_0, head_dim)
+    q_0, k_0 = rotary_emb(positions, q_0, k_0)
+    
+    positions_1 = positions.to(offload_device)
+    q_1 = q_1.view(batch_size * seq_len, num_heads_1, head_dim)
+    k_1 = k_1.view(batch_size * seq_len, num_kv_heads_1, head_dim)
+    q_1, k_1 = rotary_emb(positions_1, q_1, k_1)
+    
+    v_0 = v_0.view(batch_size * seq_len, num_kv_heads_0, head_dim)
+    v_1 = v_1.view(batch_size * seq_len, num_kv_heads_1, head_dim)
+    
+    # === Attention 计算 ===
+    stream_0 = torch.cuda.Stream(device=src_device) if src_device.type == 'cuda' else None
+    stream_1 = torch.cuda.Stream(device=offload_device) if offload_device.type == 'cuda' else None
+    
+    # 并行计算
+    if stream_0 is not None:
+        with torch.cuda.stream(stream_0):
+            o_0 = _compute_split_attention(
+                q_0, k_0, v_0,
+                config['k_cache_0'], config['v_cache_0'],
+                context, src_device, layer_id, True
+            )
+    else:
+        o_0 = _compute_split_attention(
+            q_0, k_0, v_0,
+            config['k_cache_0'], config['v_cache_0'],
+            context, src_device, layer_id, True
+        )
+    
+    if stream_1 is not None:
+        with torch.cuda.stream(stream_1):
+            o_1 = _compute_split_attention(
+                q_1, k_1, v_1,
+                config['k_cache_1'], config['v_cache_1'],
+                context, offload_device, layer_id, False
+            )
+    else:
+        o_1 = _compute_split_attention(
+            q_1, k_1, v_1,
+            config['k_cache_1'], config['v_cache_1'],
+            context, offload_device, layer_id, False
+        )
+    
+    # 同步
+    if stream_0 is not None:
+        stream_0.synchronize()
+    if stream_1 is not None:
+        stream_1.synchronize()
+    
+    # === Output Projection ===
+    o_0 = o_0.view(batch_size * seq_len, num_heads_0 * head_dim)
+    o_1 = o_1.view(batch_size * seq_len, num_heads_1 * head_dim)
+    
+    if o_1.device != src_device:
+        o_1 = o_1.to(src_device)
+    
+    out_0 = torch.nn.functional.linear(o_0, config['o_weight_0'], bias=None)
+    o_weight_1 = config['o_weight_1'].to(src_device) if config['o_weight_1'].device != src_device else config['o_weight_1']
+    out_1 = torch.nn.functional.linear(o_1, o_weight_1, bias=None)
+    
+    output = out_0 + out_1
+    
+    if seq_len == 1:
+        output = output.view(batch_size, hidden_size)
+    else:
+        output = output.view(batch_size, seq_len, hidden_size)
+    
+    return output
+
+
+def _init_split_kv_cache(layer_id: int, config: Dict) -> None:
+    """初始化分片 KV cache"""
+    DEBUG = os.environ.get("HB_DEBUG", "0") != "0"
+    
+    if config['cache_initialized']:
+        return
+    
+    src_attn_module = config['src_attn'].attn
+    src_k_cache = src_attn_module.k_cache
+    src_v_cache = src_attn_module.v_cache
+    
+    if src_k_cache.numel() == 0:
+        if DEBUG:
+            print(f"[KVHeadSplit][layer {layer_id}] Original cache not initialized yet")
+        return
+    
+    num_blocks, block_size, num_kv_heads, head_dim = src_k_cache.shape
+    split_kv_head_idx = config['split_kv_head_idx']
+    
+    src_device = config['src_device']
+    offload_device = config['offload_device']
+    
+    # Device 0
+    config['k_cache_0'] = torch.empty(
+        (num_blocks, block_size, split_kv_head_idx, head_dim),
+        dtype=src_k_cache.dtype,
+        device=src_device
+    )
+    config['v_cache_0'] = torch.empty(
+        (num_blocks, block_size, split_kv_head_idx, head_dim),
+        dtype=src_v_cache.dtype,
+        device=src_device
+    )
+    
+    config['k_cache_0'].copy_(src_k_cache[:, :, :split_kv_head_idx, :])
+    config['v_cache_0'].copy_(src_v_cache[:, :, :split_kv_head_idx, :])
+    
+    # Device 1
+    config['k_cache_1'] = torch.empty(
+        (num_blocks, block_size, num_kv_heads - split_kv_head_idx, head_dim),
+        dtype=src_k_cache.dtype,
+        device=offload_device
+    )
+    config['v_cache_1'] = torch.empty(
+        (num_blocks, block_size, num_kv_heads - split_kv_head_idx, head_dim),
+        dtype=src_v_cache.dtype,
+        device=offload_device
+    )
+    
+    config['k_cache_1'].copy_(src_k_cache[:, :, split_kv_head_idx:, :].to(offload_device))
+    config['v_cache_1'].copy_(src_v_cache[:, :, split_kv_head_idx:, :].to(offload_device))
+    
+    config['cache_initialized'] = True
+
+
+def _compute_split_attention(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    k_cache: Optional[torch.Tensor],
+    v_cache: Optional[torch.Tensor],
+    context: Context,
+    device: torch.device,
+    layer_id: int,
+    is_device_0: bool
+) -> torch.Tensor:
+    """在指定设备上计算 attention（使用独立的分片 cache）"""
+    from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+    from HBserve.layers.attention import store_kvcache
+    
+    torch.cuda.set_device(device)
+    
+    # 确保所有张量在同一设备且连续
+    q = q.to(device).contiguous()
+    k = k.to(device).contiguous()
+    v = v.to(device).contiguous()
+    
+    # 移动 context 到当前设备
+    slot_mapping = None
+    if context.slot_mapping is not None:
+        slot_mapping = context.slot_mapping.to(device, non_blocking=True).contiguous()
+    
+    block_tables = None
+    if context.block_tables is not None:
+        block_tables = context.block_tables.to(device, non_blocking=True).contiguous()
+    
+    context_lens = None
+    if context.context_lens is not None:
+        context_lens = context.context_lens.to(device, non_blocking=True).contiguous()
+    
+    # 存储 KV 到 cache
+    if k_cache is not None and v_cache is not None and slot_mapping is not None:
+        store_kvcache(k, v, k_cache, v_cache, slot_mapping)
+    
+    # 计算 attention
+    scaling = (q.shape[-1]) ** -0.5
+    
+    if context.is_prefill:
+        cu_seqlens_q = None
+        cu_seqlens_k = None
+        max_seqlen_q = context.max_seqlen_q if hasattr(context, 'max_seqlen_q') else None
+        max_seqlen_k = context.max_seqlen_k if hasattr(context, 'max_seqlen_k') else None
+        
+        if hasattr(context, "cu_seqlens_q") and context.cu_seqlens_q is not None:
+            cu_seqlens_q = context.cu_seqlens_q.to(device, non_blocking=True).contiguous()
+        
+        if hasattr(context, "cu_seqlens_k") and context.cu_seqlens_k is not None:
+            cu_seqlens_k = context.cu_seqlens_k.to(device, non_blocking=True).contiguous()
+        
+        k_use = k_cache if block_tables is not None and k_cache is not None and k_cache.numel() > 0 else k
+        v_use = v_cache if block_tables is not None and v_cache is not None and v_cache.numel() > 0 else v
+        
+        k_use = k_use.contiguous()
+        v_use = v_use.contiguous()
+        
+        o = flash_attn_varlen_func(
+            q, k_use, v_use,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            softmax_scale=scaling,
+            causal=True,
+            block_table=block_tables
+        )
+    else:
+        if k_cache is None or k_cache.numel() == 0:
+            raise RuntimeError(f"KV cache not initialized for decode mode")
+        
+        o = flash_attn_with_kvcache(
+            q.unsqueeze(1),
+            k_cache, v_cache,
+            cache_seqlens=context_lens,
+            block_table=block_tables,
+            softmax_scale=scaling,
+            causal=True
+        )
+        o = o.squeeze(1)
+    
+    return o
+
+
+def execute_attention_offload_forward(
+    layer_id: int,
+    layer: nn.Module,
+    positions: torch.Tensor,
+    hidden_states: torch.Tensor,
+    context: Context,
+    config: Dict,
+    split_context_fn: Callable,
+    sync_cache_fn: Callable
+) -> torch.Tensor:
+    """
+    执行 Attention offload 的核心逻辑
+    
+    Args:
+        layer_id: 层索引
+        layer: 当前层
+        positions: 位置张量
+        hidden_states: 隐藏状态
+        context: 上下文
+        config: Attention offload 配置
+        split_context_fn: 切分 context 的函数
+        sync_cache_fn: 同步 cache 的函数
+    
+    Returns:
+        Attention 输出
+    """
+    src_attn = layer.self_attn
+    offload_attn = config['offload_attn']
+    src_device = config['src_device']
+    offload_device = config['offload_device']
+    ratio = config['split_ratio']
+    is_prefill = context.is_prefill
+    
+    # 计算切分点
+    if is_prefill:
+        if context.cu_seqlens_q is not None and len(context.cu_seqlens_q) > 1:
+            batch_size = len(context.cu_seqlens_q) - 1
+            split_idx = int(round(batch_size * ratio))
+            split_idx = max(1, min(split_idx, batch_size - 1))
+            token_split_idx = context.cu_seqlens_q[split_idx].item()
+        else:
+            total_tokens = hidden_states.size(0)
+            token_split_idx = int(round(total_tokens * ratio))
+            token_split_idx = max(1, min(token_split_idx, total_tokens - 1))
+            split_idx = token_split_idx
+    else:
+        batch_size = hidden_states.size(0)
+        split_idx = int(round(batch_size * ratio))
+        split_idx = max(1, min(split_idx, batch_size - 1))
+        token_split_idx = split_idx
+    
+    if token_split_idx == 0 or token_split_idx >= hidden_states.size(0):
+        return src_attn(positions, hidden_states)
+    
+    # Decode 阶段：同步 KV Cache
+    if not is_prefill:
+        sync_cache_fn(src_attn, offload_attn, split_idx, context.block_tables)
+    
+    # 切分输入
+    hs_a = hidden_states[:token_split_idx]
+    hs_b = hidden_states[token_split_idx:]
+    pos_a = positions[:token_split_idx]
+    pos_b = positions[token_split_idx:]
+    
+    # 切分 Context
+    ctx_a = split_context_fn(context, 0, split_idx, token_split_idx)
+    ctx_b = split_context_fn(context, split_idx, None, token_split_idx)
+    
+    # 移动到各自设备
+    if hs_a.device != src_device:
+        hs_a = hs_a.to(src_device)
+        pos_a = pos_a.to(src_device)
+    if hs_b.device != offload_device:
+        hs_b = hs_b.to(offload_device)
+        pos_b = pos_b.to(offload_device)
+    
+    # 并行执行
+    stream_a = torch.cuda.Stream(device=src_device) if src_device.type == 'cuda' else None
+    stream_b = torch.cuda.Stream(device=offload_device) if offload_device.type == 'cuda' else None
+    
+    start_a = end_a = start_b = end_b = None
+    if src_device.type == 'cuda':
+        start_a = torch.cuda.Event(enable_timing=True)
+        end_a = torch.cuda.Event(enable_timing=True)
+    if offload_device.type == 'cuda':
+        start_b = torch.cuda.Event(enable_timing=True)
+        end_b = torch.cuda.Event(enable_timing=True)
+    
+    # 执行 A
+    if stream_a is not None:
+        with torch.cuda.stream(stream_a):
+            if start_a is not None:
+                start_a.record(stream_a)
+            set_context(**ctx_a)
+            out_a = src_attn(pos_a, hs_a)
+            if end_a is not None:
+                end_a.record(stream_a)
+    else:
+        set_context(**ctx_a)
+        out_a = src_attn(pos_a, hs_a)
+    
+    # 执行 B
+    if stream_b is not None:
+        with torch.cuda.stream(stream_b):
+            if start_b is not None:
+                start_b.record(stream_b)
+            set_context(**ctx_b)
+            out_b = offload_attn(pos_b, hs_b)
+            if end_b is not None:
+                end_b.record(stream_b)
+    else:
+        set_context(**ctx_b)
+        out_b = offload_attn(pos_b, hs_b)
+    
+    # 同步
+    if stream_a is not None:
+        stream_a.synchronize()
+    if stream_b is not None:
+        stream_b.synchronize()
+    
+    # 恢复原始 context
+    set_context(
+        is_prefill=context.is_prefill,
+        cu_seqlens_q=context.cu_seqlens_q,
+        cu_seqlens_k=context.cu_seqlens_k,
+        max_seqlen_q=context.max_seqlen_q,
+        max_seqlen_k=context.max_seqlen_k,
+        slot_mapping=context.slot_mapping,
+        context_lens=context.context_lens,
+        block_tables=context.block_tables
+    )
+    
+    # 合并结果
+    if out_b.device != src_device:
+        out_b = out_b.to(src_device)
+    
+    output = torch.cat([out_a, out_b], dim=0)
+    
+    # 自适应调优
+    if config['enable_autotune'] and start_a and end_a and start_b and end_b:
+        _update_attention_offload_ratio(
+            layer_id, config, ratio,
+            start_a, end_a, start_b, end_b,
+            src_device, offload_device
+        )
+    
+    return output
+
+
+def _update_attention_offload_ratio(
+    layer_id: int,
+    config: Dict,
+    old_ratio: float,
+    start_a, end_a, start_b, end_b,
+    src_device, offload_device
+) -> None:
+    """更新 Attention offload 的切分比例"""
+    time_a = start_a.elapsed_time(end_a) if src_device.type == 'cuda' else 0.0
+    time_b = start_b.elapsed_time(end_b) if offload_device.type == 'cuda' else 0.0
+    total = time_a + time_b
+    
+    if total > 0:
+        target_ratio = time_b / total
+        beta = config['autotune_beta']
+        new_ratio = (1.0 - beta) * old_ratio + beta * target_ratio
+        
+        stats = config['autotune_stats']
+        new_ratio = max(stats['min_ratio'], min(new_ratio, stats['max_ratio']))
+        
+        config['split_ratio'] = new_ratio
+        
+        if os.environ.get("HB_ATTN_OFFLOAD_LOG", "0") != "0":
+            print(
+                f"[AttnOffload][layer {layer_id}] "
+                f"time_a={time_a:.3f}ms time_b={time_b:.3f}ms "
+                f"ratio: {old_ratio:.3f} -> {new_ratio:.3f} (target={target_ratio:.3f})"
+            )
+
+
+def execute_layer_replication_forward(
+    layer_id: int,
+    layer: nn.Module,
+    positions: torch.Tensor,
+    hidden_states: torch.Tensor,
+    residual: Optional[torch.Tensor],
+    context: Context,
+    replica: nn.Module,
+    replica_device: torch.device,
+    split_ratio: float,
+    autotune_config: Optional[Dict],
+    layer_device: torch.device,
+    sync_kv_cache_fn: Callable
+) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """
+    执行层复制的前向传播
+    
+    Args:
+        layer_id: 层索引
+        layer: 原始层
+        positions: 位置张量
+        hidden_states: 隐藏状态
+        residual: 残差
+        context: 上下文
+        replica: 复制的层
+        replica_device: 复制层的设备
+        split_ratio: 切分比例
+        autotune_config: 自适应调优配置
+        layer_device: 原始层设备
+        sync_kv_cache_fn: 同步 KV cache 的函数
+    
+    Returns:
+        (hidden_states, residual)
+    """
+    is_prefill = context.is_prefill
+    
+    # 保存原始 context
+    orig_ctx = Context(
+        is_prefill=context.is_prefill,
+        cu_seqlens_q=context.cu_seqlens_q,
+        cu_seqlens_k=context.cu_seqlens_k,
+        max_seqlen_q=context.max_seqlen_q,
+        max_seqlen_k=context.max_seqlen_k,
+        slot_mapping=context.slot_mapping,
+        context_lens=context.context_lens,
+        block_tables=context.block_tables
+    )
+    
+    # 计算切分点
+    if is_prefill:
+        if context.cu_seqlens_q is not None and len(context.cu_seqlens_q) > 1:
+            batch_size = len(context.cu_seqlens_q) - 1
+            split_idx = int(round(batch_size * split_ratio))
+            split_idx = max(1, min(split_idx, batch_size - 1))
+            token_split_idx = context.cu_seqlens_q[split_idx].item()
+        else:
+            total_tokens = hidden_states.size(0)
+            token_split_idx = int(round(total_tokens * split_ratio))
+            token_split_idx = max(1, min(token_split_idx, total_tokens - 1))
+            split_idx = token_split_idx
+    else:
+        batch_size = hidden_states.size(0)
+        split_idx = int(round(batch_size * split_ratio))
+        split_idx = max(1, min(split_idx, batch_size - 1))
+        token_split_idx = split_idx
+    
+    if token_split_idx == 0 or token_split_idx >= hidden_states.size(0):
+        return layer(positions, hidden_states, residual)
+    
+    # Decode 阶段需要同步 KV cache
+    if not is_prefill:
+        sync_kv_cache_fn(layer, replica, split_idx, context.block_tables)
+    
+    # 切分输入
+    hs_a = hidden_states[:token_split_idx]
+    hs_b = hidden_states[token_split_idx:]
+    pos_a = positions[:token_split_idx]
+    pos_b = positions[token_split_idx:]
+    res_a = None if residual is None else residual[:token_split_idx]
+    res_b = None if residual is None else residual[token_split_idx:]
+    
+    # 准备context
+    cu_seqlens_q_a = context.cu_seqlens_q[:split_idx+1] if context.cu_seqlens_q is not None else None
+    cu_seqlens_k_a = context.cu_seqlens_k[:split_idx+1] if context.cu_seqlens_k is not None else None
+    slot_mapping_a = context.slot_mapping[:token_split_idx] if context.slot_mapping is not None else None
+    context_lens_a = context.context_lens[:split_idx] if context.context_lens is not None else None
+    block_tables_a = context.block_tables[:split_idx] if context.block_tables is not None else None
+    
+    cu_seqlens_q_b = context.cu_seqlens_q[split_idx:] - token_split_idx if context.cu_seqlens_q is not None else None
+    cu_seqlens_k_b = context.cu_seqlens_k[split_idx:] - token_split_idx if context.cu_seqlens_k is not None else None
+    slot_mapping_b = context.slot_mapping[token_split_idx:] if context.slot_mapping is not None else None
+    context_lens_b = context.context_lens[split_idx:] if context.context_lens is not None else None
+    block_tables_b = context.block_tables[split_idx:] if context.block_tables is not None else None
+    
+    # 移动到各自设备
+    if hs_a.device != layer_device:
+        hs_a = hs_a.to(layer_device)
+        pos_a = pos_a.to(layer_device)
+        if res_a is not None:
+            res_a = res_a.to(layer_device)
+    
+    if hs_b.device != replica_device:
+        hs_b = hs_b.to(replica_device)
+        pos_b = pos_b.to(replica_device)
+        if res_b is not None:
+            res_b = res_b.to(replica_device)
+    
+    # 准备stream和计时
+    stream_a = torch.cuda.Stream(device=layer_device) if layer_device.type == 'cuda' else None
+    stream_b = torch.cuda.Stream(device=replica_device) if replica_device.type == 'cuda' else None
+    
+    start_a = end_a = start_b = end_b = None
+    if layer_device.type == 'cuda':
+        start_a = torch.cuda.Event(enable_timing=True)
+        end_a = torch.cuda.Event(enable_timing=True)
+    if replica_device.type == 'cuda':
+        start_b = torch.cuda.Event(enable_timing=True)
+        end_b = torch.cuda.Event(enable_timing=True)
+    
+    # 并行执行
+    if stream_a is not None:
+        with torch.cuda.stream(stream_a):
+            if start_a is not None:
+                start_a.record(stream_a)
+            set_context(
+                is_prefill=orig_ctx.is_prefill,
+                cu_seqlens_q=cu_seqlens_q_a,
+                cu_seqlens_k=cu_seqlens_k_a,
+                max_seqlen_q=orig_ctx.max_seqlen_q,
+                max_seqlen_k=orig_ctx.max_seqlen_k,
+                slot_mapping=slot_mapping_a,
+                context_lens=context_lens_a,
+                block_tables=block_tables_a
+            )
+            out_a, res_out_a = layer(pos_a, hs_a, res_a)
+            if end_a is not None:
+                end_a.record(stream_a)
+    else:
+        set_context(
+            is_prefill=orig_ctx.is_prefill,
+            cu_seqlens_q=cu_seqlens_q_a,
+            cu_seqlens_k=cu_seqlens_k_a,
+            max_seqlen_q=orig_ctx.max_seqlen_q,
+            max_seqlen_k=orig_ctx.max_seqlen_k,
+            slot_mapping=slot_mapping_a,
+            context_lens=context_lens_a,
+            block_tables=block_tables_a
+        )
+        out_a, res_out_a = layer(pos_a, hs_a, res_a)
+    
+    if stream_b is not None:
+        with torch.cuda.stream(stream_b):
+            if start_b is not None:
+                start_b.record(stream_b)
+            set_context(
+                is_prefill=orig_ctx.is_prefill,
+                cu_seqlens_q=cu_seqlens_q_b,
+                cu_seqlens_k=cu_seqlens_k_b,
+                max_seqlen_q=orig_ctx.max_seqlen_q,
+                max_seqlen_k=orig_ctx.max_seqlen_k,
+                slot_mapping=slot_mapping_b,
+                context_lens=context_lens_b,
+                block_tables=block_tables_b
+            )
+            out_b, res_out_b = replica(pos_b, hs_b, res_b)
+            if end_b is not None:
+                end_b.record(stream_b)
+    else:
+        set_context(
+            is_prefill=orig_ctx.is_prefill,
+            cu_seqlens_q=cu_seqlens_q_b,
+            cu_seqlens_k=cu_seqlens_k_b,
+            max_seqlen_q=orig_ctx.max_seqlen_q,
+            max_seqlen_k=orig_ctx.max_seqlen_k,
+            slot_mapping=slot_mapping_b,
+            context_lens=context_lens_b,
+            block_tables=block_tables_b
+        )
+        out_b, res_out_b = replica(pos_b, hs_b, res_b)
+    
+    # 同步
+    if stream_a is not None:
+        stream_a.synchronize()
+    if stream_b is not None:
+        stream_b.synchronize()
+    
+    # 恢复context
+    set_context(
+        is_prefill=orig_ctx.is_prefill,
+        cu_seqlens_q=orig_ctx.cu_seqlens_q,
+        cu_seqlens_k=orig_ctx.cu_seqlens_k,
+        max_seqlen_q=orig_ctx.max_seqlen_q,
+        max_seqlen_k=orig_ctx.max_seqlen_k,
+        slot_mapping=orig_ctx.slot_mapping,
+        context_lens=orig_ctx.context_lens,
+        block_tables=orig_ctx.block_tables
+    )
+    
+    # 移回layer_device
+    if out_b.device != layer_device:
+        out_b = out_b.to(layer_device)
+    if res_out_b is not None and res_out_b.device != layer_device:
+        res_out_b = res_out_b.to(layer_device)
+    
+    # 合并结果
+    hidden_states = torch.cat([out_a, out_b], dim=0)
+    if res_out_a is None and res_out_b is None:
+        residual = None
+    elif res_out_a is None:
+        residual = torch.cat([torch.zeros_like(out_a), res_out_b], dim=0)
+    elif res_out_b is None:
+        residual = torch.cat([res_out_a, torch.zeros_like(out_b)], dim=0)
+    else:
+        residual = torch.cat([res_out_a, res_out_b], dim=0)
+    
+    # Autotune
+    if autotune_config and start_a and end_a and start_b and end_b:
+        time_a = start_a.elapsed_time(end_a) if layer_device.type == 'cuda' else 0.0
+        time_b = start_b.elapsed_time(end_b) if replica_device.type == 'cuda' else 0.0
+        total = time_a + time_b
+        if total > 0:
+            target_ratio = time_b / total
+            beta = autotune_config["beta"]
+            new_ratio = (1.0 - beta) * split_ratio + beta * target_ratio
+            new_ratio = max(autotune_config["min"], min(new_ratio, autotune_config["max"]))
+            # 这里需要通过某种方式更新比例，可以通过返回值或全局状态
+            if os.environ.get("HB_REPLICA_LOG", "0") != "0":
+                print(
+                    f"[Replica][layer {layer_id}] time_a={time_a:.3f}ms time_b={time_b:.3f}ms "
+                    f"ratio(old)={split_ratio:.3f} -> ratio(new)={new_ratio:.3f}"
+                )
+    
+    return hidden_states, residual
