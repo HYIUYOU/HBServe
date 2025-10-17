@@ -17,10 +17,7 @@ class LLMEngine:
     def __init__(self, model, **kwargs):
         config_fields = {field.name for field in fields(Config)}
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
-        print("=="*50)
-        print("model: ", model)
         config = Config(model, **config_kwargs)
-        print("config: ", config)
         self.ps = []
         self.events = []
         ctx = mp.get_context("spawn") # spawn 模式，确保子进程完全独立，避免CUDA context 冲突
