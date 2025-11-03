@@ -553,12 +553,15 @@ def execute_layer_replication_forward(
         block_tables=context.block_tables
     )
     
-    # 计算切分点
+    # ===== 修复1: 改进切分点计算 =====
     if is_prefill:
         if context.cu_seqlens_q is not None and len(context.cu_seqlens_q) > 1:
             batch_size = len(context.cu_seqlens_q) - 1
             split_idx = int(round(batch_size * split_ratio))
+            # 确保至少有1个batch在每一侧
             split_idx = max(1, min(split_idx, batch_size - 1))
+            
+            # 获取token切分点
             token_split_idx = context.cu_seqlens_q[split_idx].item()
         else:
             total_tokens = hidden_states.size(0)
@@ -571,7 +574,15 @@ def execute_layer_replication_forward(
         split_idx = max(1, min(split_idx, batch_size - 1))
         token_split_idx = split_idx
     
-    if token_split_idx == 0 or token_split_idx >= hidden_states.size(0):
+    # ===== 修复2: 增强边界检查 =====
+    if split_idx <= 0 or split_idx >= batch_size:
+        if os.environ.get("HB_REPLICA_LOG", "0") != "0":
+            print(f"[Replica][layer {layer_id}] Invalid split_idx={split_idx}, batch_size={batch_size}, fallback to single device")
+        return layer(positions, hidden_states, residual)
+    
+    if token_split_idx <= 0 or token_split_idx >= hidden_states.size(0):
+        if os.environ.get("HB_REPLICA_LOG", "0") != "0":
+            print(f"[Replica][layer {layer_id}] Invalid token_split_idx={token_split_idx}, total_tokens={hidden_states.size(0)}, fallback to single device")
         return layer(positions, hidden_states, residual)
     
     # Decode 阶段需要同步 KV cache
@@ -579,25 +590,67 @@ def execute_layer_replication_forward(
         sync_kv_cache_fn(layer, replica, split_idx, context.block_tables)
     
     # 切分输入
-    hs_a = hidden_states[:token_split_idx]
-    hs_b = hidden_states[token_split_idx:]
-    pos_a = positions[:token_split_idx]
-    pos_b = positions[token_split_idx:]
-    res_a = None if residual is None else residual[:token_split_idx]
-    res_b = None if residual is None else residual[token_split_idx:]
+    hs_a = hidden_states[:token_split_idx].contiguous()
+    hs_b = hidden_states[token_split_idx:].contiguous()
+    pos_a = positions[:token_split_idx].contiguous()
+    pos_b = positions[token_split_idx:].contiguous()
+    res_a = None if residual is None else residual[:token_split_idx].contiguous()
+    res_b = None if residual is None else residual[token_split_idx:].contiguous()
     
-    # 准备context
-    cu_seqlens_q_a = context.cu_seqlens_q[:split_idx+1] if context.cu_seqlens_q is not None else None
-    cu_seqlens_k_a = context.cu_seqlens_k[:split_idx+1] if context.cu_seqlens_k is not None else None
-    slot_mapping_a = context.slot_mapping[:token_split_idx] if context.slot_mapping is not None else None
-    context_lens_a = context.context_lens[:split_idx] if context.context_lens is not None else None
-    block_tables_a = context.block_tables[:split_idx] if context.block_tables is not None else None
+    # ===== 修复3: 正确切分 cu_seqlens =====
+    cu_seqlens_q_a = None
+    cu_seqlens_k_a = None
+    cu_seqlens_q_b = None
+    cu_seqlens_k_b = None
     
-    cu_seqlens_q_b = context.cu_seqlens_q[split_idx:] - token_split_idx if context.cu_seqlens_q is not None else None
-    cu_seqlens_k_b = context.cu_seqlens_k[split_idx:] - token_split_idx if context.cu_seqlens_k is not None else None
-    slot_mapping_b = context.slot_mapping[token_split_idx:] if context.slot_mapping is not None else None
-    context_lens_b = context.context_lens[split_idx:] if context.context_lens is not None else None
-    block_tables_b = context.block_tables[split_idx:] if context.block_tables is not None else None
+    if context.cu_seqlens_q is not None:
+        cu_seqlens_q_a = context.cu_seqlens_q[:split_idx+1].contiguous()
+        
+        # 正确处理 B 部分：需要重新归零
+        cu_seqlens_q_b = context.cu_seqlens_q[split_idx:].clone().contiguous()
+        if len(cu_seqlens_q_b) > 0:
+            offset = cu_seqlens_q_b[0].item()
+            cu_seqlens_q_b = cu_seqlens_q_b - offset
+    
+    if context.cu_seqlens_k is not None:
+        cu_seqlens_k_a = context.cu_seqlens_k[:split_idx+1].contiguous()
+        
+        cu_seqlens_k_b = context.cu_seqlens_k[split_idx:].clone().contiguous()
+        if len(cu_seqlens_k_b) > 0:
+            offset = cu_seqlens_k_b[0].item()
+            cu_seqlens_k_b = cu_seqlens_k_b - offset
+    
+    # ===== 修复4: 确保 slot_mapping 和其他张量的正确切分 =====
+    slot_mapping_a = None
+    slot_mapping_b = None
+    if context.slot_mapping is not None:
+        if token_split_idx < len(context.slot_mapping):
+            slot_mapping_a = context.slot_mapping[:token_split_idx].contiguous()
+            slot_mapping_b = context.slot_mapping[token_split_idx:].contiguous()
+        else:
+            # 边界情况：token_split_idx 超出范围
+            slot_mapping_a = context.slot_mapping.contiguous()
+            slot_mapping_b = None
+    
+    context_lens_a = None
+    context_lens_b = None
+    if context.context_lens is not None:
+        if split_idx < len(context.context_lens):
+            context_lens_a = context.context_lens[:split_idx].contiguous()
+            context_lens_b = context.context_lens[split_idx:].contiguous()
+        else:
+            context_lens_a = context.context_lens.contiguous()
+            context_lens_b = None
+    
+    block_tables_a = None
+    block_tables_b = None
+    if context.block_tables is not None:
+        if split_idx < len(context.block_tables):
+            block_tables_a = context.block_tables[:split_idx].contiguous()
+            block_tables_b = context.block_tables[split_idx:].contiguous()
+        else:
+            block_tables_a = context.block_tables.contiguous()
+            block_tables_b = None
     
     # 移动到各自设备
     if hs_a.device != layer_device:
@@ -623,6 +676,15 @@ def execute_layer_replication_forward(
     if replica_device.type == 'cuda':
         start_b = torch.cuda.Event(enable_timing=True)
         end_b = torch.cuda.Event(enable_timing=True)
+    
+    # ===== 修复5: 添加调试日志 =====
+    if os.environ.get("HB_REPLICA_LOG", "0") != "0":
+        print(f"[Replica][layer {layer_id}] split_idx={split_idx}, token_split_idx={token_split_idx}")
+        print(f"  hs_a.shape={hs_a.shape}, hs_b.shape={hs_b.shape}")
+        if cu_seqlens_q_a is not None:
+            print(f"  cu_seqlens_q_a={cu_seqlens_q_a.tolist()}")
+        if cu_seqlens_q_b is not None:
+            print(f"  cu_seqlens_q_b={cu_seqlens_q_b.tolist()}")
     
     # 并行执行
     if stream_a is not None:
@@ -730,7 +792,7 @@ def execute_layer_replication_forward(
             beta = autotune_config["beta"]
             new_ratio = (1.0 - beta) * split_ratio + beta * target_ratio
             new_ratio = max(autotune_config["min"], min(new_ratio, autotune_config["max"]))
-            # 这里需要通过某种方式更新比例，可以通过返回值或全局状态
+            
             if os.environ.get("HB_REPLICA_LOG", "0") != "0":
                 print(
                     f"[Replica][layer {layer_id}] time_a={time_a:.3f}ms time_b={time_b:.3f}ms "
@@ -738,3 +800,747 @@ def execute_layer_replication_forward(
                 )
     
     return hidden_states, residual
+
+
+def execute_continuous_layer_replication(
+    layer_id: int,
+    layer: nn.Module,
+    positions: torch.Tensor,
+    hidden_states: torch.Tensor,
+    residual: Optional[torch.Tensor],
+    context: Context,
+    replica: nn.Module,
+    replica_device: torch.device,
+    split_ratio: float,
+    autotune_config: Optional[Dict],
+    layer_device: torch.device,
+    sync_kv_cache_fn: Callable,
+    is_first_in_group: bool,
+    is_last_in_group: bool
+) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """
+    执行连续复制层组的前向传播（优化版）
+    
+    关键设计：
+    - 第一层：切分 -> 并行计算 -> 合并返回 + 保存分片状态
+    - 中间层：检查分片状态 -> 直接用分片数据计算 -> 合并返回 + 更新分片状态
+    - 最后一层：检查分片状态 -> 直接用分片数据计算 -> 合并返回 + 清除分片状态
+    
+    **重要**：所有层都返回完整的合并张量，确保设备管理逻辑正常工作
+    """
+    is_prefill = context.is_prefill
+    DEBUG = os.environ.get("HB_REPLICA_LOG", "0") != "0"
+    
+    # 检查是否有上一层保存的分片状态
+    split_state = _load_split_state_from_context(context)
+    has_split_state = (split_state is not None) and (not is_first_in_group)
+    
+    # ===== 情况1：需要切分输入（第一层或没有分片状态） =====
+    if is_first_in_group or not has_split_state:
+        if DEBUG:
+            print(f"[ReplicaGroup][layer {layer_id}] Splitting input")
+        
+        # 保存原始 context
+        orig_ctx = Context(
+            is_prefill=context.is_prefill,
+            cu_seqlens_q=context.cu_seqlens_q,
+            cu_seqlens_k=context.cu_seqlens_k,
+            max_seqlen_q=context.max_seqlen_q,
+            max_seqlen_k=context.max_seqlen_k,
+            slot_mapping=context.slot_mapping,
+            context_lens=context.context_lens,
+            block_tables=context.block_tables
+        )
+        
+        # 计算切分点
+        split_idx, token_split_idx, batch_size = _compute_split_indices(
+            hidden_states, context, split_ratio, is_prefill
+        )
+        
+        # 边界检查
+        if split_idx <= 0 or split_idx >= batch_size or \
+           token_split_idx <= 0 or token_split_idx >= hidden_states.size(0):
+            if DEBUG:
+                print(f"[ReplicaGroup][layer {layer_id}] Invalid split, fallback")
+            # 不使用分片，直接执行
+            result = layer(positions, hidden_states, residual)
+            if not is_last_in_group:
+                _clear_split_state_from_context(context)  # 确保清除可能存在的旧状态
+            return result
+        
+        # 同步 KV cache（decode 阶段）
+        if not is_prefill:
+            sync_kv_cache_fn(layer, replica, split_idx, context.block_tables)
+        
+        # 切分所有输入
+        split_data = _split_inputs_for_replication(
+            hidden_states, positions, residual, context,
+            split_idx, token_split_idx
+        )
+        
+        # 移动到各自设备
+        split_data = _move_split_data_to_devices(
+            split_data, layer_device, replica_device
+        )
+        
+        # 并行执行
+        out_a, res_a, out_b, res_b = _parallel_execute_split_layer(
+            layer, replica, split_data, orig_ctx,
+            layer_device, replica_device
+        )
+        
+        # **合并结果**
+        hidden_states, residual = _merge_split_outputs(
+            out_a, out_b, res_a, res_b, layer_device
+        )
+        
+        # 如果不是最后一层，保存分片状态供下一层使用
+        if not is_last_in_group:
+            _save_split_state_to_context(
+                context,
+                split_idx=split_idx,
+                token_split_idx=token_split_idx,
+                out_a=out_a,
+                res_a=res_a,
+                out_b=out_b,
+                res_b=res_b,
+                pos_a=split_data['pos_a'],
+                pos_b=split_data['pos_b'],
+                ctx_a=split_data['ctx_a'],
+                ctx_b=split_data['ctx_b'],
+                orig_ctx=orig_ctx,
+                device_a=layer_device,
+                device_b=replica_device
+            )
+        
+        return hidden_states, residual
+    
+    # ===== 情况2：使用上一层的分片状态（中间层和最后一层） =====
+    else:
+        if DEBUG:
+            print(f"[ReplicaGroup][layer {layer_id}] Using split state from previous layer")
+        
+        # 同步 KV cache
+        if not is_prefill:
+            sync_kv_cache_fn(layer, replica, split_state['split_idx'], context.block_tables)
+        
+        # 从分片状态获取数据（这些是上一层的输出）
+        hs_a = split_state['hs_a']
+        hs_b = split_state['hs_b']
+        pos_a = split_state['pos_a']
+        pos_b = split_state['pos_b']
+        res_a = split_state['res_a']
+        res_b = split_state['res_b']
+        ctx_a = split_state['ctx_a']
+        ctx_b = split_state['ctx_b']
+        orig_ctx = split_state['orig_ctx']
+        
+        # 确保数据在正确的设备上
+        if hs_a.device != layer_device:
+            hs_a = hs_a.to(layer_device)
+            if res_a is not None:
+                res_a = res_a.to(layer_device)
+        
+        if hs_b.device != replica_device:
+            hs_b = hs_b.to(replica_device)
+            if res_b is not None:
+                res_b = res_b.to(replica_device)
+        
+        # 构建 split_data
+        split_data = {
+            'hs_a': hs_a,
+            'hs_b': hs_b,
+            'pos_a': pos_a,
+            'pos_b': pos_b,
+            'res_a': res_a,
+            'res_b': res_b,
+            'ctx_a': ctx_a,
+            'ctx_b': ctx_b
+        }
+        
+        # 并行执行
+        out_a, res_out_a, out_b, res_out_b = _parallel_execute_split_layer(
+            layer, replica, split_data, orig_ctx,
+            layer_device, replica_device
+        )
+        
+        # **合并结果**
+        hidden_states, residual = _merge_split_outputs(
+            out_a, out_b, res_out_a, res_out_b, layer_device
+        )
+        
+        # 如果是最后一层，清除分片状态；否则更新分片状态
+        if is_last_in_group:
+            _clear_split_state_from_context(context)
+            if DEBUG:
+                print(f"[ReplicaGroup][layer {layer_id}] Last layer - cleared split state")
+        else:
+            # 更新分片状态供下一层使用
+            _save_split_state_to_context(
+                context,
+                split_idx=split_state['split_idx'],
+                token_split_idx=split_state['token_split_idx'],
+                out_a=out_a,
+                res_a=res_out_a,
+                out_b=out_b,
+                res_b=res_out_b,
+                pos_a=pos_a,
+                pos_b=pos_b,
+                ctx_a=ctx_a,
+                ctx_b=ctx_b,
+                orig_ctx=orig_ctx,
+                device_a=layer_device,
+                device_b=replica_device
+            )
+            if DEBUG:
+                print(f"[ReplicaGroup][layer {layer_id}] Updated split state for next layer")
+        
+        return hidden_states, residual
+
+
+# ===== 辅助函数 =====
+
+def _compute_split_indices(
+    hidden_states: torch.Tensor,
+    context: Context,
+    split_ratio: float,
+    is_prefill: bool
+) -> tuple[int, int, int]:
+    """计算切分索引"""
+    if is_prefill:
+        if context.cu_seqlens_q is not None and len(context.cu_seqlens_q) > 1:
+            batch_size = len(context.cu_seqlens_q) - 1
+            split_idx = int(round(batch_size * split_ratio))
+            split_idx = max(1, min(split_idx, batch_size - 1))
+            token_split_idx = context.cu_seqlens_q[split_idx].item()
+        else:
+            total_tokens = hidden_states.size(0)
+            token_split_idx = int(round(total_tokens * split_ratio))
+            token_split_idx = max(1, min(token_split_idx, total_tokens - 1))
+            split_idx = token_split_idx
+            batch_size = total_tokens
+    else:
+        batch_size = hidden_states.size(0)
+        split_idx = int(round(batch_size * split_ratio))
+        split_idx = max(1, min(split_idx, batch_size - 1))
+        token_split_idx = split_idx
+    
+    return split_idx, token_split_idx, batch_size
+
+
+def _split_inputs_for_replication(
+    hidden_states: torch.Tensor,
+    positions: torch.Tensor,
+    residual: Optional[torch.Tensor],
+    context: Context,
+    split_idx: int,
+    token_split_idx: int
+) -> Dict:
+    """切分输入数据"""
+    # 切分张量
+    hs_a = hidden_states[:token_split_idx].contiguous()
+    hs_b = hidden_states[token_split_idx:].contiguous()
+    pos_a = positions[:token_split_idx].contiguous()
+    pos_b = positions[token_split_idx:].contiguous()
+    res_a = None if residual is None else residual[:token_split_idx].contiguous()
+    res_b = None if residual is None else residual[token_split_idx:].contiguous()
+    
+    # 切分 context（使用之前修复的逻辑）
+    ctx_a, ctx_b = _split_context_for_replication(context, split_idx, token_split_idx)
+    
+    return {
+        'hs_a': hs_a, 'hs_b': hs_b,
+        'pos_a': pos_a, 'pos_b': pos_b,
+        'res_a': res_a, 'res_b': res_b,
+        'ctx_a': ctx_a, 'ctx_b': ctx_b,
+        'split_idx': split_idx,
+        'token_split_idx': token_split_idx,
+        'orig_ctx': context
+    }
+
+
+def _split_context_for_replication(
+    context: Context,
+    split_idx: int,
+    token_split_idx: int
+) -> tuple[Dict, Dict]:
+    """切分 context（修复版）"""
+    # Context A
+    cu_seqlens_q_a = None
+    cu_seqlens_k_a = None
+    if context.cu_seqlens_q is not None:
+        cu_seqlens_q_a = context.cu_seqlens_q[:split_idx+1].contiguous()
+    if context.cu_seqlens_k is not None:
+        cu_seqlens_k_a = context.cu_seqlens_k[:split_idx+1].contiguous()
+    
+    slot_mapping_a = None if context.slot_mapping is None else \
+        context.slot_mapping[:token_split_idx].contiguous()
+    context_lens_a = None if context.context_lens is None else \
+        context.context_lens[:split_idx].contiguous()
+    block_tables_a = None if context.block_tables is None else \
+        context.block_tables[:split_idx].contiguous()
+    
+    # Context B
+    cu_seqlens_q_b = None
+    cu_seqlens_k_b = None
+    if context.cu_seqlens_q is not None:
+        cu_seqlens_q_b = context.cu_seqlens_q[split_idx:].clone().contiguous()
+        if len(cu_seqlens_q_b) > 0:
+            offset = cu_seqlens_q_b[0].item()
+            cu_seqlens_q_b = cu_seqlens_q_b - offset
+    
+    if context.cu_seqlens_k is not None:
+        cu_seqlens_k_b = context.cu_seqlens_k[split_idx:].clone().contiguous()
+        if len(cu_seqlens_k_b) > 0:
+            offset = cu_seqlens_k_b[0].item()
+            cu_seqlens_k_b = cu_seqlens_k_b - offset
+    
+    slot_mapping_b = None if context.slot_mapping is None else \
+        context.slot_mapping[token_split_idx:].contiguous()
+    context_lens_b = None if context.context_lens is None else \
+        context.context_lens[split_idx:].contiguous()
+    block_tables_b = None if context.block_tables is None else \
+        context.block_tables[split_idx:].contiguous()
+    
+    ctx_a = {
+        'cu_seqlens_q': cu_seqlens_q_a,
+        'cu_seqlens_k': cu_seqlens_k_a,
+        'slot_mapping': slot_mapping_a,
+        'context_lens': context_lens_a,
+        'block_tables': block_tables_a
+    }
+    
+    ctx_b = {
+        'cu_seqlens_q': cu_seqlens_q_b,
+        'cu_seqlens_k': cu_seqlens_k_b,
+        'slot_mapping': slot_mapping_b,
+        'context_lens': context_lens_b,
+        'block_tables': block_tables_b
+    }
+    
+    return ctx_a, ctx_b
+
+
+def _move_split_data_to_devices(
+    split_data: Dict,
+    device_a: torch.device,
+    device_b: torch.device
+) -> Dict:
+    """将分片数据移动到对应设备"""
+    split_data['hs_a'] = split_data['hs_a'].to(device_a)
+    split_data['pos_a'] = split_data['pos_a'].to(device_a)
+    if split_data['res_a'] is not None:
+        split_data['res_a'] = split_data['res_a'].to(device_a)
+    
+    split_data['hs_b'] = split_data['hs_b'].to(device_b)
+    split_data['pos_b'] = split_data['pos_b'].to(device_b)
+    if split_data['res_b'] is not None:
+        split_data['res_b'] = split_data['res_b'].to(device_b)
+    
+    return split_data
+
+
+def _parallel_execute_split_layer(
+    layer_a: nn.Module,
+    layer_b: nn.Module,
+    split_data: Dict,
+    orig_ctx: Context,
+    device_a: torch.device,
+    device_b: torch.device
+) -> tuple:
+    """并行执行分片层"""
+    stream_a = torch.cuda.Stream(device=device_a) if device_a.type == 'cuda' else None
+    stream_b = torch.cuda.Stream(device=device_b) if device_b.type == 'cuda' else None
+    
+    # 执行 A
+    if stream_a is not None:
+        with torch.cuda.stream(stream_a):
+            set_context(
+                is_prefill=orig_ctx.is_prefill,
+                cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
+                cu_seqlens_k=split_data['ctx_a']['cu_seqlens_k'],
+                max_seqlen_q=orig_ctx.max_seqlen_q,
+                max_seqlen_k=orig_ctx.max_seqlen_k,
+                slot_mapping=split_data['ctx_a']['slot_mapping'],
+                context_lens=split_data['ctx_a']['context_lens'],
+                block_tables=split_data['ctx_a']['block_tables']
+            )
+            out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
+    else:
+        set_context(
+            is_prefill=orig_ctx.is_prefill,
+            cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
+            cu_seqlens_k=split_data['ctx_a']['cu_seqlens_k'],
+            max_seqlen_q=orig_ctx.max_seqlen_q,
+            max_seqlen_k=orig_ctx.max_seqlen_k,
+            slot_mapping=split_data['ctx_a']['slot_mapping'],
+            context_lens=split_data['ctx_a']['context_lens'],
+            block_tables=split_data['ctx_a']['block_tables']
+        )
+        out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
+    
+    # 执行 B
+    if stream_b is not None:
+        with torch.cuda.stream(stream_b):
+            set_context(
+                is_prefill=orig_ctx.is_prefill,
+                cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
+                cu_seqlens_k=split_data['ctx_b']['cu_seqlens_k'],
+                max_seqlen_q=orig_ctx.max_seqlen_q,
+                max_seqlen_k=orig_ctx.max_seqlen_k,
+                slot_mapping=split_data['ctx_b']['slot_mapping'],
+                context_lens=split_data['ctx_b']['context_lens'],
+                block_tables=split_data['ctx_b']['block_tables']
+            )
+            out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
+    else:
+        set_context(
+            is_prefill=orig_ctx.is_prefill,
+            cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
+            cu_seqlens_k=split_data['ctx_b']['cu_seqlens_k'],
+            max_seqlen_q=orig_ctx.max_seqlen_q,
+            max_seqlen_k=orig_ctx.max_seqlen_k,
+            slot_mapping=split_data['ctx_b']['slot_mapping'],
+            context_lens=split_data['ctx_b']['context_lens'],
+            block_tables=split_data['ctx_b']['block_tables']
+        )
+        out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
+    
+    # 同步
+    if stream_a is not None:
+        stream_a.synchronize()
+    if stream_b is not None:
+        stream_b.synchronize()
+    
+    # 恢复原始 context
+    set_context(
+        is_prefill=orig_ctx.is_prefill,
+        cu_seqlens_q=orig_ctx.cu_seqlens_q,
+        cu_seqlens_k=orig_ctx.cu_seqlens_k,
+        max_seqlen_q=orig_ctx.max_seqlen_q,
+        max_seqlen_k=orig_ctx.max_seqlen_k,
+        slot_mapping=orig_ctx.slot_mapping,
+        context_lens=orig_ctx.context_lens,
+        block_tables=orig_ctx.block_tables
+    )
+    
+    return out_a, res_a, out_b, res_b
+
+
+
+
+def _load_split_state_from_context(context: Context) -> Optional[Dict]:
+    """从 context 加载分片状态"""
+    return getattr(context, '_replica_split_state', None)
+
+
+def _clear_split_state_from_context(context: Context):
+    """清除分片状态"""
+    if hasattr(context, '_replica_split_state'):
+        delattr(context, '_replica_split_state')
+
+def _create_split_output(
+    out_a: torch.Tensor,
+    out_b: torch.Tensor,
+    res_a: Optional[torch.Tensor],
+    res_b: Optional[torch.Tensor]
+) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """
+    创建假的合并输出（实际保持分片状态）
+    
+    注意：返回的是占位符，真实数据在 context._replica_split_state 中
+    """
+    # 返回空张量作为占位符（维度为0，不占显存）
+    placeholder_hs = torch.empty(0, dtype=out_a.dtype, device=out_a.device)
+    placeholder_res = None
+    if res_a is not None or res_b is not None:
+        placeholder_res = torch.empty(0, dtype=(res_a if res_a is not None else res_b).dtype,
+                                     device=(res_a if res_a is not None else res_b).device)
+    
+    return placeholder_hs, placeholder_res
+
+def _compute_split_indices(
+    hidden_states: torch.Tensor,
+    context: Context,
+    split_ratio: float,
+    is_prefill: bool
+) -> tuple[int, int, int]:
+    """计算切分索引"""
+    if is_prefill:
+        if context.cu_seqlens_q is not None and len(context.cu_seqlens_q) > 1:
+            batch_size = len(context.cu_seqlens_q) - 1
+            split_idx = int(round(batch_size * split_ratio))
+            split_idx = max(1, min(split_idx, batch_size - 1))
+            token_split_idx = context.cu_seqlens_q[split_idx].item()
+        else:
+            total_tokens = hidden_states.size(0)
+            token_split_idx = int(round(total_tokens * split_ratio))
+            token_split_idx = max(1, min(token_split_idx, total_tokens - 1))
+            split_idx = token_split_idx
+            batch_size = total_tokens
+    else:
+        batch_size = hidden_states.size(0)
+        split_idx = int(round(batch_size * split_ratio))
+        split_idx = max(1, min(split_idx, batch_size - 1))
+        token_split_idx = split_idx
+    
+    return split_idx, token_split_idx, batch_size
+
+
+def _split_inputs_for_replication(
+    hidden_states: torch.Tensor,
+    positions: torch.Tensor,
+    residual: Optional[torch.Tensor],
+    context: Context,
+    split_idx: int,
+    token_split_idx: int
+) -> Dict:
+    """切分输入数据"""
+    # 切分张量
+    hs_a = hidden_states[:token_split_idx].contiguous()
+    hs_b = hidden_states[token_split_idx:].contiguous()
+    pos_a = positions[:token_split_idx].contiguous()
+    pos_b = positions[token_split_idx:].contiguous()
+    res_a = None if residual is None else residual[:token_split_idx].contiguous()
+    res_b = None if residual is None else residual[token_split_idx:].contiguous()
+    
+    # 切分 context
+    ctx_a, ctx_b = _split_context_for_replication(context, split_idx, token_split_idx)
+    
+    return {
+        'hs_a': hs_a, 'hs_b': hs_b,
+        'pos_a': pos_a, 'pos_b': pos_b,
+        'res_a': res_a, 'res_b': res_b,
+        'ctx_a': ctx_a, 'ctx_b': ctx_b,
+        'split_idx': split_idx,
+        'token_split_idx': token_split_idx
+    }
+
+
+def _split_context_for_replication(
+    context: Context,
+    split_idx: int,
+    token_split_idx: int
+) -> tuple[Dict, Dict]:
+    """切分 context（修复版）"""
+    # Context A
+    cu_seqlens_q_a = None
+    cu_seqlens_k_a = None
+    if context.cu_seqlens_q is not None:
+        cu_seqlens_q_a = context.cu_seqlens_q[:split_idx+1].contiguous()
+    if context.cu_seqlens_k is not None:
+        cu_seqlens_k_a = context.cu_seqlens_k[:split_idx+1].contiguous()
+    
+    slot_mapping_a = None if context.slot_mapping is None else \
+        context.slot_mapping[:token_split_idx].contiguous()
+    context_lens_a = None if context.context_lens is None else \
+        context.context_lens[:split_idx].contiguous()
+    block_tables_a = None if context.block_tables is None else \
+        context.block_tables[:split_idx].contiguous()
+    
+    # Context B（修复：正确处理偏移）
+    cu_seqlens_q_b = None
+    cu_seqlens_k_b = None
+    if context.cu_seqlens_q is not None:
+        cu_seqlens_q_b = context.cu_seqlens_q[split_idx:].clone().contiguous()
+        if len(cu_seqlens_q_b) > 0:
+            offset = cu_seqlens_q_b[0].item()
+            cu_seqlens_q_b = cu_seqlens_q_b - offset
+    
+    if context.cu_seqlens_k is not None:
+        cu_seqlens_k_b = context.cu_seqlens_k[split_idx:].clone().contiguous()
+        if len(cu_seqlens_k_b) > 0:
+            offset = cu_seqlens_k_b[0].item()
+            cu_seqlens_k_b = cu_seqlens_k_b - offset
+    
+    slot_mapping_b = None if context.slot_mapping is None else \
+        context.slot_mapping[token_split_idx:].contiguous()
+    context_lens_b = None if context.context_lens is None else \
+        context.context_lens[split_idx:].contiguous()
+    block_tables_b = None if context.block_tables is None else \
+        context.block_tables[split_idx:].contiguous()
+    
+    ctx_a = {
+        'cu_seqlens_q': cu_seqlens_q_a,
+        'cu_seqlens_k': cu_seqlens_k_a,
+        'slot_mapping': slot_mapping_a,
+        'context_lens': context_lens_a,
+        'block_tables': block_tables_a
+    }
+    
+    ctx_b = {
+        'cu_seqlens_q': cu_seqlens_q_b,
+        'cu_seqlens_k': cu_seqlens_k_b,
+        'slot_mapping': slot_mapping_b,
+        'context_lens': context_lens_b,
+        'block_tables': block_tables_b
+    }
+    
+    return ctx_a, ctx_b
+
+
+def _move_split_data_to_devices(
+    split_data: Dict,
+    device_a: torch.device,
+    device_b: torch.device
+) -> Dict:
+    """将分片数据移动到对应设备"""
+    split_data['hs_a'] = split_data['hs_a'].to(device_a)
+    split_data['pos_a'] = split_data['pos_a'].to(device_a)
+    if split_data['res_a'] is not None:
+        split_data['res_a'] = split_data['res_a'].to(device_a)
+    
+    split_data['hs_b'] = split_data['hs_b'].to(device_b)
+    split_data['pos_b'] = split_data['pos_b'].to(device_b)
+    if split_data['res_b'] is not None:
+        split_data['res_b'] = split_data['res_b'].to(device_b)
+    
+    return split_data
+
+
+def _parallel_execute_split_layer(
+    layer_a: nn.Module,
+    layer_b: nn.Module,
+    split_data: Dict,
+    orig_ctx: Context,
+    device_a: torch.device,
+    device_b: torch.device
+) -> tuple:
+    """并行执行分片层"""
+    stream_a = torch.cuda.Stream(device=device_a) if device_a.type == 'cuda' else None
+    stream_b = torch.cuda.Stream(device=device_b) if device_b.type == 'cuda' else None
+    
+    # 执行 A
+    if stream_a is not None:
+        with torch.cuda.stream(stream_a):
+            set_context(
+                is_prefill=orig_ctx.is_prefill,
+                cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
+                cu_seqlens_k=split_data['ctx_a']['cu_seqlens_k'],
+                max_seqlen_q=orig_ctx.max_seqlen_q,
+                max_seqlen_k=orig_ctx.max_seqlen_k,
+                slot_mapping=split_data['ctx_a']['slot_mapping'],
+                context_lens=split_data['ctx_a']['context_lens'],
+                block_tables=split_data['ctx_a']['block_tables']
+            )
+            out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
+    else:
+        set_context(
+            is_prefill=orig_ctx.is_prefill,
+            cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
+            cu_seqlens_k=split_data['ctx_a']['cu_seqlens_k'],
+            max_seqlen_q=orig_ctx.max_seqlen_q,
+            max_seqlen_k=orig_ctx.max_seqlen_k,
+            slot_mapping=split_data['ctx_a']['slot_mapping'],
+            context_lens=split_data['ctx_a']['context_lens'],
+            block_tables=split_data['ctx_a']['block_tables']
+        )
+        out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
+    
+    # 执行 B
+    if stream_b is not None:
+        with torch.cuda.stream(stream_b):
+            set_context(
+                is_prefill=orig_ctx.is_prefill,
+                cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
+                cu_seqlens_k=split_data['ctx_b']['cu_seqlens_k'],
+                max_seqlen_q=orig_ctx.max_seqlen_q,
+                max_seqlen_k=orig_ctx.max_seqlen_k,
+                slot_mapping=split_data['ctx_b']['slot_mapping'],
+                context_lens=split_data['ctx_b']['context_lens'],
+                block_tables=split_data['ctx_b']['block_tables']
+            )
+            out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
+    else:
+        set_context(
+            is_prefill=orig_ctx.is_prefill,
+            cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
+            cu_seqlens_k=split_data['ctx_b']['cu_seqlens_k'],
+            max_seqlen_q=orig_ctx.max_seqlen_q,
+            max_seqlen_k=orig_ctx.max_seqlen_k,
+            slot_mapping=split_data['ctx_b']['slot_mapping'],
+            context_lens=split_data['ctx_b']['context_lens'],
+            block_tables=split_data['ctx_b']['block_tables']
+        )
+        out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
+    
+    # 同步
+    if stream_a is not None:
+        stream_a.synchronize()
+    if stream_b is not None:
+        stream_b.synchronize()
+    
+    # 恢复原始 context
+    set_context(
+        is_prefill=orig_ctx.is_prefill,
+        cu_seqlens_q=orig_ctx.cu_seqlens_q,
+        cu_seqlens_k=orig_ctx.cu_seqlens_k,
+        max_seqlen_q=orig_ctx.max_seqlen_q,
+        max_seqlen_k=orig_ctx.max_seqlen_k,
+        slot_mapping=orig_ctx.slot_mapping,
+        context_lens=orig_ctx.context_lens,
+        block_tables=orig_ctx.block_tables
+    )
+    
+    return out_a, res_a, out_b, res_b
+
+
+def _merge_split_outputs(
+    out_a: torch.Tensor,
+    out_b: torch.Tensor,
+    res_a: Optional[torch.Tensor],
+    res_b: Optional[torch.Tensor],
+    target_device: torch.device
+) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """合并分片输出"""
+    if out_b.device != target_device:
+        out_b = out_b.to(target_device)
+    if res_b is not None and res_b.device != target_device:
+        res_b = res_b.to(target_device)
+    
+    hidden_states = torch.cat([out_a, out_b], dim=0)
+    
+    if res_a is None and res_b is None:
+        residual = None
+    else:
+        residual = torch.cat([
+            res_a if res_a is not None else torch.zeros_like(out_a),
+            res_b if res_b is not None else torch.zeros_like(out_b)
+        ], dim=0)
+    
+    return hidden_states, residual
+
+
+def _save_split_state_to_context(
+    context: Context,
+    split_idx: int,
+    token_split_idx: int,
+    out_a: torch.Tensor,
+    res_a: Optional[torch.Tensor],
+    out_b: torch.Tensor,
+    res_b: Optional[torch.Tensor],
+    pos_a: torch.Tensor,
+    pos_b: torch.Tensor,
+    ctx_a: Dict,
+    ctx_b: Dict,
+    orig_ctx: Context,
+    device_a: torch.device,
+    device_b: torch.device
+):
+    """保存分片状态到 context"""
+    context._replica_split_state = {
+        'split_idx': split_idx,
+        'token_split_idx': token_split_idx,
+        'hs_a': out_a,
+        'res_a': res_a,
+        'hs_b': out_b,
+        'res_b': res_b,
+        'pos_a': pos_a,
+        'pos_b': pos_b,
+        'ctx_a': ctx_a,
+        'ctx_b': ctx_b,
+        'orig_ctx': orig_ctx,
+        'device_a': device_a,
+        'device_b': device_b
+    }
+
