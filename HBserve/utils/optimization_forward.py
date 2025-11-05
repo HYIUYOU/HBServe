@@ -144,9 +144,12 @@ def execute_kv_head_split_forward(
     else:
         raise ValueError(f"Unexpected hidden_states shape: {hidden_states.shape}")
     
-    # 初始化分片 cache（仅在第一次 decode 时）
-    if not is_prefill and not config['cache_initialized']:
-        _init_split_kv_cache(layer_id, config)
+    # 初始化分片 cache（如果还没初始化的话）
+    # 注意：需要在原始 attention 的 cache 已经创建之后才能初始化
+    if not config['cache_initialized']:
+        src_attn_module = config['src_attn'].attn
+        if src_attn_module.k_cache.numel() > 0:
+            _init_split_kv_cache(layer_id, config)
     
     # === QKV Projection ===
     qkv_0 = torch.nn.functional.linear(
@@ -358,10 +361,6 @@ def _compute_split_attention(
     if context.context_lens is not None:
         context_lens = context.context_lens.to(device, non_blocking=True).contiguous()
     
-    # 存储 KV 到 cache
-    if k_cache is not None and v_cache is not None and slot_mapping is not None:
-        store_kvcache(k, v, k_cache, v_cache, slot_mapping)
-    
     # 计算 attention
     scaling = (q.shape[-1]) ** -0.5
     
@@ -377,11 +376,15 @@ def _compute_split_attention(
         if hasattr(context, "cu_seqlens_k") and context.cu_seqlens_k is not None:
             cu_seqlens_k = context.cu_seqlens_k.to(device, non_blocking=True).contiguous()
         
-        k_use = k_cache if block_tables is not None and k_cache is not None and k_cache.numel() > 0 else k
-        v_use = v_cache if block_tables is not None and v_cache is not None and v_cache.numel() > 0 else v
+        # 存储 KV 到分片 cache（如果 cache 已初始化）
+        if k_cache is not None and v_cache is not None and slot_mapping is not None:
+            k_contiguous = k.contiguous()
+            v_contiguous = v.contiguous()
+            store_kvcache(k_contiguous, v_contiguous, k_cache, v_cache, slot_mapping)
         
-        k_use = k_use.contiguous()
-        v_use = v_use.contiguous()
+        # Prefill 阶段直接使用当前的 k, v 进行attention计算
+        k_use = k.contiguous()
+        v_use = v.contiguous()
         
         o = flash_attn_varlen_func(
             q, k_use, v_use,
@@ -391,7 +394,7 @@ def _compute_split_attention(
             max_seqlen_k=max_seqlen_k,
             softmax_scale=scaling,
             causal=True,
-            block_table=block_tables
+            block_table=None  # Prefill 阶段不使用 block_table
         )
     else:
         if k_cache is None or k_cache.numel() == 0:
