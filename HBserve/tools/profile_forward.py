@@ -59,7 +59,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--mode", choices=["baseline", "attn_offload", "kv_split", "layer_replica"], default="baseline",
                         help="选择待分析的优化路径")
-    parser.add_argument("--model-path", type=str, default=None,
+    parser.add_argument("--model-path", type=str, default="/home/admin/workspace/aop_lab/app_data/.cache/models--facebook--opt-13b/snapshots/e515202d1e7750da62d245fbccb2723b9c1790f5",
                         help="HuggingFace 权重目录；若提供则加载真实权重")
     parser.add_argument("--layer-id", type=int, default=0, help="应用优化的层索引（baseline 可忽略）")
     parser.add_argument("--split-ratio", type=float, default=0.5, help="批次切分比例 (0,1)")
