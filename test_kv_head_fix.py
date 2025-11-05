@@ -16,7 +16,7 @@ def main():
     print("=" * 80)
     
     # 使用 OPT-13B 模型
-    path = "/root/llm-resource/Models/opt-13b"
+    path = "/home/admin/workspace/aop_lab/app_data/.cache/models--facebook--opt-13b/snapshots/e515202d1e7750da62d245fbccb2723b9c1790f5"
     
     print(f"\n1. 加载模型: {path}")
     llm = LLM(path, enforce_eager=True, tensor_parallel_size=1)
