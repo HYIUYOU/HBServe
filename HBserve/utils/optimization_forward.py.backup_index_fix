@@ -1451,74 +1451,36 @@ def _split_context_for_replication(
     split_idx: int,
     token_split_idx: int
 ) -> tuple[Dict, Dict]:
-    """切分 context（修复版 - 增强边界检查）"""
-    import torch
-    DEBUG = os.environ.get("HB_REPLICA_LOG", "0") != "0"
-    
+    """切分 context（修复版）"""
     # Context A
     cu_seqlens_q_a = None
     cu_seqlens_k_a = None
     if context.cu_seqlens_q is not None:
-        # 边界检查
-        if split_idx + 1 <= len(context.cu_seqlens_q):
-            cu_seqlens_q_a = context.cu_seqlens_q[:split_idx+1].contiguous()
-        else:
-            cu_seqlens_q_a = context.cu_seqlens_q.contiguous()
-            if DEBUG:
-                print(f"[FIX] cu_seqlens_q_a: split_idx+1={split_idx+1} > len={len(context.cu_seqlens_q)}")
-    
+        cu_seqlens_q_a = context.cu_seqlens_q[:split_idx+1].contiguous()
     if context.cu_seqlens_k is not None:
-        if split_idx + 1 <= len(context.cu_seqlens_k):
-            cu_seqlens_k_a = context.cu_seqlens_k[:split_idx+1].contiguous()
-        else:
-            cu_seqlens_k_a = context.cu_seqlens_k.contiguous()
+        cu_seqlens_k_a = context.cu_seqlens_k[:split_idx+1].contiguous()
     
-    slot_mapping_a = None
-    if context.slot_mapping is not None:
-        if token_split_idx <= len(context.slot_mapping):
-            slot_mapping_a = context.slot_mapping[:token_split_idx].contiguous()
-        else:
-            slot_mapping_a = context.slot_mapping.contiguous()
-            if DEBUG:
-                print(f"[FIX] slot_mapping_a: token_split_idx={token_split_idx} > len={len(context.slot_mapping)}")
+    slot_mapping_a = None if context.slot_mapping is None else \
+        context.slot_mapping[:token_split_idx].contiguous()
+    context_lens_a = None if context.context_lens is None else \
+        context.context_lens[:split_idx].contiguous()
+    block_tables_a = None if context.block_tables is None else \
+        context.block_tables[:split_idx].contiguous()
     
-    context_lens_a = None
-    if context.context_lens is not None:
-        if split_idx <= len(context.context_lens):
-            context_lens_a = context.context_lens[:split_idx].contiguous()
-        else:
-            context_lens_a = context.context_lens.contiguous()
-    
-    block_tables_a = None
-    if context.block_tables is not None:
-        if split_idx <= len(context.block_tables):
-            block_tables_a = context.block_tables[:split_idx].contiguous()
-        else:
-            block_tables_a = context.block_tables.contiguous()
-    
-    # Context B（修复：正确处理偏移 + 边界检查）
+    # Context B（修复：正确处理偏移）
     cu_seqlens_q_b = None
     cu_seqlens_k_b = None
     if context.cu_seqlens_q is not None:
-        if split_idx < len(context.cu_seqlens_q):
-            cu_seqlens_q_b = context.cu_seqlens_q[split_idx:].clone().contiguous()
-            if len(cu_seqlens_q_b) > 0:
-                offset = cu_seqlens_q_b[0].item()
-                cu_seqlens_q_b = cu_seqlens_q_b - offset
-        else:
-            # 如果split_idx过大，创建一个空的但有效的张量
-            cu_seqlens_q_b = torch.tensor([0], dtype=context.cu_seqlens_q.dtype, device=context.cu_seqlens_q.device)
-            if DEBUG:
-                print(f"[FIX] cu_seqlens_q_b: split_idx={split_idx} >= len={len(context.cu_seqlens_q)}, using empty")
+        cu_seqlens_q_b = context.cu_seqlens_q[split_idx:].clone().contiguous()
+        if len(cu_seqlens_q_b) > 0:
+            offset = cu_seqlens_q_b[0].item()
+            cu_seqlens_q_b = cu_seqlens_q_b - offset
     
     if context.cu_seqlens_k is not None:
-        if split_idx < len(context.cu_seqlens_k):
-            cu_seqlens_k_b = context.cu_seqlens_k[split_idx:].clone().contiguous()
-            if len(cu_seqlens_k_b) > 0:
-                offset = cu_seqlens_k_b[0].item()
-                cu_seqlens_k_b = cu_seqlens_k_b - offset
-        else:
-            cu_seqlens_k_b = torch.tensor([0], dtype=context.cu_seqlens_k.dtype, device=context.cu_seqlens_k.device)
+        cu_seqlens_k_b = context.cu_seqlens_k[split_idx:].clone().contiguous()
+        if len(cu_seqlens_k_b) > 0:
+            offset = cu_seqlens_k_b[0].item()
+            cu_seqlens_k_b = cu_seqlens_k_b - offset
     
     slot_mapping_b = None if context.slot_mapping is None else \
         context.slot_mapping[token_split_idx:].contiguous()
