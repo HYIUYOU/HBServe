@@ -66,6 +66,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-kv-index", type=int, default=None,
                         help="KV Head Split 的 KV 切分索引；默认取一半")
     parser.add_argument("--enable-autotune", action="store_true", help="启用可用的自适应调参逻辑")
+    parser.add_argument("--dtype", type=str, choices=["auto", "fp16", "bf16", "fp32"], default="auto",
+                        help="模型计算精度；auto=CUDA下fp16/CPU下fp32")
 
     parser.add_argument("--primary-device", type=str,
                         default="cuda:0" if torch.cuda.is_available() else "cpu",
@@ -311,9 +313,23 @@ def ensure_trace_dir(args: argparse.Namespace) -> Optional[Path]:
     return trace_dir
 
 
-def load_model_from_args(args: argparse.Namespace) -> Tuple[Qwen3ForCausalLM, int]:
+def resolve_dtype(dtype_flag: str, device: torch.device) -> torch.dtype:
+    if dtype_flag == "fp16":
+        return torch.float16
+    if dtype_flag == "bf16":
+        return torch.bfloat16
+    if dtype_flag == "fp32":
+        return torch.float32
+    # auto
+    if device.type == "cuda":
+        return torch.float16
+    return torch.float32
+
+
+def load_model_from_args(args: argparse.Namespace, dtype: torch.dtype) -> Tuple[Qwen3ForCausalLM, int]:
     if args.model_path:
         hf_config = AutoConfig.from_pretrained(args.model_path)
+        hf_config.torch_dtype = dtype
         model = create_model_from_config(hf_config)
         load_model(model, args.model_path)
         vocab_size = hf_config.vocab_size
@@ -338,14 +354,15 @@ def main() -> None:
     if primary_device.type == "cuda":
         torch.cuda.set_device(primary_device)
 
-    model, vocab_size = load_model_from_args(args)
+    dtype = resolve_dtype(args.dtype, primary_device)
+    model, vocab_size = load_model_from_args(args, dtype)
     model.eval()
 
     ensure_layer_devices(model, primary_device)
 
     configure_optimizations(model, args, primary_device)
 
-    model = model.to(primary_device)
+    model = model.to(device=primary_device, dtype=dtype)
 
     model_config = getattr(getattr(model, "model", None), "config", None)
     if model_config is not None and hasattr(model_config, "max_position_embeddings"):
