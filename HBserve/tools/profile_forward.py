@@ -26,7 +26,8 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+import os
+from typing import Dict, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -37,9 +38,11 @@ from torch.profiler import (
     schedule,
     tensorboard_trace_handler,
 )
-from transformers import Qwen3Config
+from transformers import AutoConfig, Qwen3Config
 
+from HBserve.models import create_model_from_config
 from HBserve.models.qwen3 import Qwen3ForCausalLM
+from HBserve.utils.loader import load_model
 from HBserve.utils.context import reset_context, set_context
 
 
@@ -56,6 +59,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--mode", choices=["baseline", "attn_offload", "kv_split", "layer_replica"], default="baseline",
                         help="选择待分析的优化路径")
+    parser.add_argument("--model-path", type=str, default=None,
+                        help="HuggingFace 权重目录；若提供则加载真实权重")
     parser.add_argument("--layer-id", type=int, default=0, help="应用优化的层索引（baseline 可忽略）")
     parser.add_argument("--split-ratio", type=float, default=0.5, help="批次切分比例 (0,1)")
     parser.add_argument("--split-kv-index", type=int, default=None,
@@ -77,14 +82,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scenario", choices=["prefill", "decode"], default="prefill",
                         help="采样阶段：prefill 或 decode")
 
-    parser.add_argument("--num-layers", type=int, default=4, help="模型层数（可调小以便实验）")
-    parser.add_argument("--hidden-size", type=int, default=1024, help="隐藏层维度")
+    parser.add_argument("--num-layers", type=int, default=4, help="模型层数（无权重时使用）")
+    parser.add_argument("--hidden-size", type=int, default=1024, help="隐藏层维度（无权重时使用）")
     parser.add_argument("--intermediate-size", type=int, default=None,
-                        help="MLP 中间层维度，默认 4 * hidden-size")
-    parser.add_argument("--num-heads", type=int, default=16, help="Attention 头数")
-    parser.add_argument("--num-kv-heads", type=int, default=16, help="KV 头数")
-    parser.add_argument("--max-position", type=int, default=4096, help="RoPE 最大位置")
-    parser.add_argument("--vocab-size", type=int, default=32000, help="词表大小（随机权重实验即可）")
+                        help="MLP 中间层维度（无权重时默认 4 * hidden-size）")
+    parser.add_argument("--num-heads", type=int, default=16, help="Attention 头数（无权重时使用）")
+    parser.add_argument("--num-kv-heads", type=int, default=16, help="KV 头数（无权重时使用）")
+    parser.add_argument("--max-position", type=int, default=4096, help="RoPE 最大位置（无权重时使用）")
+    parser.add_argument("--vocab-size", type=int, default=32000, help="词表大小（无权重时用于生成随机输入）")
 
     parser.add_argument("--dist-backend", type=str, default="gloo", help="单进程初始化使用的分布式后端")
 
@@ -113,6 +118,8 @@ def init_distributed(backend: str) -> None:
         raise RuntimeError("torch.distributed 不可用，无法运行该脚本")
     if dist.is_initialized():
         return
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", "29500")
     dist.init_process_group(backend=backend, rank=0, world_size=1)
 
 
@@ -159,6 +166,10 @@ def configure_optimizations(model: Qwen3ForCausalLM, args: argparse.Namespace,
 
     if mode == "baseline":
         return
+
+    total_layers = len(model.model.layers)
+    if layer_id < 0 or layer_id >= total_layers:
+        raise ValueError(f"layer_id={layer_id} 超出范围 [0, {total_layers - 1}]")
 
     if mode in {"attn_offload", "kv_split"}:
         offload_device = to_device(args.offload_device)
@@ -239,16 +250,16 @@ def make_decode_inputs(batch_size: int, vocab_size: int, context_len: int,
     return ForwardInputs("decode", input_ids, positions, context_kwargs)
 
 
-def prepare_inputs(args: argparse.Namespace, device: torch.device) -> tuple[ForwardInputs, Optional[ForwardInputs]]:
+def prepare_inputs(args: argparse.Namespace, device: torch.device, vocab_size: int) -> tuple[ForwardInputs, Optional[ForwardInputs]]:
     if args.scenario == "prefill":
-        profile_inputs = make_prefill_inputs(args.batch_size, args.seq_len, args.vocab_size, device)
+        profile_inputs = make_prefill_inputs(args.batch_size, args.seq_len, vocab_size, device)
         return profile_inputs, None
 
     prefill_len = args.prefill_seq_len or args.seq_len
     context_len = args.decode_context_len or prefill_len
 
-    warmup_inputs = make_prefill_inputs(args.batch_size, prefill_len, args.vocab_size, device)
-    decode_inputs = make_decode_inputs(args.batch_size, args.vocab_size, context_len, device)
+    warmup_inputs = make_prefill_inputs(args.batch_size, prefill_len, vocab_size, device)
+    decode_inputs = make_decode_inputs(args.batch_size, vocab_size, context_len, device)
     return decode_inputs, warmup_inputs
 
 
@@ -300,6 +311,20 @@ def ensure_trace_dir(args: argparse.Namespace) -> Optional[Path]:
     return trace_dir
 
 
+def load_model_from_args(args: argparse.Namespace) -> Tuple[Qwen3ForCausalLM, int]:
+    if args.model_path:
+        hf_config = AutoConfig.from_pretrained(args.model_path)
+        model = create_model_from_config(hf_config)
+        load_model(model, args.model_path)
+        vocab_size = hf_config.vocab_size
+        return model, vocab_size
+
+    config = build_config(args)
+    model = Qwen3ForCausalLM(config)
+    vocab_size = config.vocab_size
+    return model, vocab_size
+
+
 def main() -> None:
     torch.manual_seed(0)
     args = parse_args()
@@ -313,21 +338,28 @@ def main() -> None:
     if primary_device.type == "cuda":
         torch.cuda.set_device(primary_device)
 
-    config = build_config(args)
-    model = Qwen3ForCausalLM(config)
+    model, vocab_size = load_model_from_args(args)
     model.eval()
 
     ensure_layer_devices(model, primary_device)
 
     configure_optimizations(model, args, primary_device)
 
-    if primary_device.type == "cuda":
-        model = model.to(primary_device)
-    else:
-        model = model.to(primary_device)
+    model = model.to(primary_device)
+
+    model_config = getattr(getattr(model, "model", None), "config", None)
+    if model_config is not None and hasattr(model_config, "max_position_embeddings"):
+        max_position = model_config.max_position_embeddings
+        for name, value in {
+            "seq_len": args.seq_len,
+            "prefill_seq_len": args.prefill_seq_len,
+            "decode_context_len": args.decode_context_len,
+        }.items():
+            if value is not None and value > max_position:
+                raise ValueError(f"{name}={value} 超过模型的 max_position_embeddings={max_position}")
 
     reset_context()
-    profile_inputs, warmup_inputs = prepare_inputs(args, primary_device)
+    profile_inputs, warmup_inputs = prepare_inputs(args, primary_device, vocab_size)
 
     if warmup_inputs is not None:
         set_context(**warmup_inputs.context_kwargs)
