@@ -21,16 +21,24 @@ def store_kvcache_kernel(
     v_cache_ptr,
     slot_mapping_ptr,
     D: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
 ):
     idx = tl.program_id(0) # 表示当前的线程id
-    key_offsets = idx * key_stride + tl.arange(0, D)
-    value_offsets = idx * value_stride + tl.arange(0, D)
-    key = tl.load(key_ptr + key_offsets)
-    value = tl.load(value_ptr + value_offsets) # 一次加载D个元素
+    
+    # 使用 BLOCK_SIZE 代替 D，并添加 mask 来处理非 2 的幂次方的 D
+    offsets = tl.arange(0, BLOCK_SIZE)
+    mask = offsets < D
+    
+    key_offsets = idx * key_stride + offsets
+    value_offsets = idx * value_stride + offsets
+    key = tl.load(key_ptr + key_offsets, mask=mask, other=0.0)
+    value = tl.load(value_ptr + value_offsets, mask=mask, other=0.0) # 一次加载D个元素
+    
     slot = tl.load(slot_mapping_ptr + idx)
-    cache_offsets = slot * D + tl.arange(0, D) # 定位对于的KV应该存在哪个位置
-    tl.store(k_cache_ptr + cache_offsets, key)
-    tl.store(v_cache_ptr + cache_offsets, value) # 一次存D个元素
+    cache_offsets = slot * D + offsets # 定位对于的KV应该存在哪个位置
+    
+    tl.store(k_cache_ptr + cache_offsets, key, mask=mask)
+    tl.store(v_cache_ptr + cache_offsets, value, mask=mask) # 一次存D个元素
 
 
 def store_kvcache(key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor, slot_mapping: torch.Tensor):
@@ -44,12 +52,17 @@ def store_kvcache(key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor,
     assert k_cache.stride(1) == D and v_cache.stride(1) == D
     assert slot_mapping.numel() == N # slot_mapping是一个list，表示每个token应该存储在KV Cache 的哪个位置
     
+    # 计算最接近 D 的 2 的幂次方（向上取整）
+    # 例如：D=2560 -> BLOCK_SIZE=4096
+    import math
+    BLOCK_SIZE = 2 ** math.ceil(math.log2(D))
+    
     # Triton Grid配置的语法
     # 1. 1D grid  ==> Kernel[(N,)](args)  表示N个线程并行
     # 2. 2D grid  ==> Kernel[(M,N)](args)  表示M*N个线程并行
     # 3. 3D grid  ==> Kernel[(P,M,N)](args)  表示P*M*N个线程并行
     store_kvcache_kernel[(N,)](key, key.stride(0), value, value.stride(0), 
-                                k_cache, v_cache, slot_mapping, D)
+                                k_cache, v_cache, slot_mapping, D, BLOCK_SIZE)
 
 
 class Attention(nn.Module):
