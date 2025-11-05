@@ -3,6 +3,7 @@ import os
 from HBserve import LLM, SamplingParams
 from transformers import AutoTokenizer
 import torch
+from HBserve.utils.loader import load_longbench_prompts
 os.environ['HB_ATTN_OFFLOAD_LOG'] = '0'
 os.environ['HB_DEBUG'] = '0'  # 不启用 attention 调试日志
 os.environ['HB_REPLICA_LOG'] = '0'
@@ -37,21 +38,23 @@ def main():
     prompts = [
         "introduce yourself",
         "describe the benefits of model parallelism",
-        "introduce yourself",
-        "list all prime numbers within 100",
-        "introduce yourself",
-        "list all prime numbers within 100",
-        "introduce yourself",
-        "list all prime numbers within 100",
-        "introduce yourself",
-        "list all prime numbers within 100",
-        "introduce yourself",
-        "list all prime numbers within 100",
-        "introduce yourself",
-        "list all prime numbers within 100",
-        "introduce yourself",
-        "list all prime numbers within 100",
+        # "introduce yourself",
+        # "list all prime numbers within 100",
+        # "introduce yourself",
+        # "list all prime numbers within 100",
+        # "introduce yourself",
+        # "list all prime numbers within 100",
+        # "introduce yourself",
+        # "list all prime numbers within 100",
+        # "introduce yourself",
+        # "list all prime numbers within 100",
+        # "introduce yourself",
+        # "list all prime numbers within 100",
+        # "introduce yourself",
+        # "list all prime numbers within 100",
     ]
+    jsonl_file = "/home/admin/workspace/aop_lab/app_source/data/longbench/2wikimqa_e.jsonl"
+    prompts = load_longbench_prompts(jsonl_file, max_samples=50)  
     prompts = [
         tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt}],

@@ -1,0 +1,108 @@
+`torch_dtype` is deprecated! Use `dtype` instead!
+✓ 检测到模型类型: opt
+🔧 标准化 OPT 配置...
+  ✓ 设置 num_key_value_heads = 40 (MHA)
+  ✓ 计算 head_dim = 128
+  ✓ 设置 intermediate_size = 20480 (from ffn_dim)
+  ✓ 设置 hidden_act = relu
+  ✓ 设置 rope_theta = 10000.0 (默认值)
+  ✓ 设置 rms_norm_eps = 1e-06 (默认值)
+  ✓ 设置 attention_bias = True
+✅ OPT 配置标准化完成
+配置层, 10 使用 KV Head Split...
+KV Head Split: 层 10 Attention 已按 KV Head 切分：
+  原设备 cuda:0: Q heads [0:20], KV heads [0:20]
+  目标设备 cuda:1: Q heads [20:40], KV heads [20:40]
+配置层, 11 使用 KV Head Split...
+KV Head Split: 层 11 Attention 已按 KV Head 切分：
+  原设备 cuda:0: Q heads [0:20], KV heads [0:20]
+  目标设备 cuda:1: Q heads [20:40], KV heads [20:40]
+配置层, 12 使用 KV Head Split...
+KV Head Split: 层 12 Attention 已按 KV Head 切分：
+  原设备 cuda:0: Q heads [0:20], KV heads [0:20]
+  目标设备 cuda:1: Q heads [20:40], KV heads [20:40]
+配置层, 13 使用 KV Head Split...
+KV Head Split: 层 13 Attention 已按 KV Head 切分：
+  原设备 cuda:0: Q heads [0:20], KV heads [0:20]
+  目标设备 cuda:1: Q heads [20:40], KV heads [20:40]
+配置层, 14 使用 KV Head Split...
+KV Head Split: 层 14 Attention 已按 KV Head 切分：
+  原设备 cuda:0: Q heads [0:20], KV heads [0:20]
+  目标设备 cuda:1: Q heads [20:40], KV heads [20:40]
+配置层, 15 使用 KV Head Split...
+KV Head Split: 层 15 Attention 已按 KV Head 切分：
+  原设备 cuda:0: Q heads [0:20], KV heads [0:20]
+  目标设备 cuda:1: Q heads [20:40], KV heads [20:40]
+✓ KV Head Split 已启用
+
+Generating:   0%|          | 0/50 [00:00<?, ?it/s][rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/example_attention_offload_kv_head.py", line 58, in <module>
+[rank0]:     main()
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/example_attention_offload_kv_head.py", line 44, in main
+[rank0]:     outputs = llm.generate(prompts, sampling_params)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/llm_engine.py", line 77, in generate
+[rank0]:     output, num_tokens = self.step()
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/llm_engine.py", line 52, in step
+[rank0]:     token_ids = self.model_runner.call("run", seqs, is_prefill)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/model_runner.py", line 91, in call
+[rank0]:     return method(*args)   
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/model_runner.py", line 233, in run
+[rank0]:     logits = self.run_model(input_ids, positions, is_prefill)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
+[rank0]:     return func(*args, **kwargs)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/model_runner.py", line 210, in run_model
+[rank0]:     return self.model.compute_logits(self.model(input_ids, positions))
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/opt.py", line 467, in forward
+[rank0]:     hidden_states = self.model(input_ids, positions)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/opt.py", line 285, in forward
+[rank0]:     hidden_states, residual = layer(positions, hidden_states, residual)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/opt.py", line 172, in forward
+[rank0]:     hidden_states = self.self_attn(positions, hidden_states)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/opt.py", line 101, in forward
+[rank0]:     o = self.attn(q, k, v)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/layers/attention.py", line 106, in forward
+[rank0]:     v = v.contiguous()
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/utils/_device.py", line 106, in __torch_function__
+[rank0]:     return func(*args, **kwargs)
+[rank0]: RuntimeError: CUDA error: device-side assert triggered
+[rank0]: CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+[rank0]: For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+[rank0]: Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+Exception ignored in atexit callback: <bound method LLMEngine.exit of <HBserve.llm.LLM object at 0x7ff8cb32be50>>
+Traceback (most recent call last):
+  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/llm_engine.py", line 39, in exit
+    self.model_runner.call("exit") # 调用model_runner中的exit方法
+  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/model_runner.py", line 91, in call
+    return method(*args)   
+  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/model_runner.py", line 60, in exit
+    torch.cuda.synchronize()
+  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/cuda/__init__.py", line 954, in synchronize
+    return torch._C._cuda_synchronize()
+RuntimeError: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+Generating:   0%|          | 0/50 [00:01<?, ?it/s]
+[rank0]:[W1105 15:00:59.276094925 ProcessGroupNCCL.cpp:1250] Warning: WARNING: process group has NOT been destroyed before we destruct ProcessGroupNCCL. On normal program exit, the application should call destroy_process_group to ensure that any pending NCCL operations have finished in this process. In rare cases this process can exit before this point and block the progress of another member of the process group. This constraint has always been present,  but this warning has only been added since PyTorch 2.4 (function operator())
