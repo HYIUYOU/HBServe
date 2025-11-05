@@ -7,11 +7,11 @@ echo "╚═══════════════════════�
 echo ""
 
 # 默认配置
-MODEL_PATH="../Qwen3-0.6B"
+MODEL_PATH="/home/admin/workspace/aop_lab/app_data/.cache/models--facebook--opt-13b/snapshots/e515202d1e7750da62d245fbccb2723b9c1790f5"
 BATCH_SIZE=4
 MAX_TOKENS=256
 NUM_ITERS=5
-LAYERS=""
+LAYERS="5,6,7,8,9,10"
 
 # 解析参数
 while [[ $# -gt 0 ]]; do
