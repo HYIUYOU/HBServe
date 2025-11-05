@@ -588,7 +588,7 @@ class RealModelBenchmark:
         
         print(f"\n{'='*80}")
         print(f"所有测试完成")
-        print(f"={'*80}\n")
+        print(f"{'='*80}\n")
     
     def print_summary(self):
         """打印测试摘要"""

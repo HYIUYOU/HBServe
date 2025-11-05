@@ -61,9 +61,10 @@ def main():
         )
         for prompt in prompts
     ]
-
+    import time
+    t1 = time.time()
     outputs = llm.generate(prompts, sampling_params)
-
+    print("latency: ", time.time() - t1, " throughput: ", len(prompts) /(time.time() - t1) )
     # for prompt, output in zip(prompts, outputs):
     #     print("\n")
     #     print(f"Prompt: {prompt!r}")
