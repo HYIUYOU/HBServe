@@ -1,113 +1,56 @@
-[rank0]: Traceback (most recent call last):
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/runpy.py", line 196, in _run_module_as_main
-[rank0]:     return _run_code(code, main_globals, None,
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/runpy.py", line 86, in _run_code
-[rank0]:     exec(code, run_globals)
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/tools/profile_forward.py", line 389, in <module>
-[rank0]:     main()
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/tools/profile_forward.py", line 378, in main
-[rank0]:     model.model(profile_inputs.input_ids, profile_inputs.positions)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-[rank0]:     return self._call_impl(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-[rank0]:     return forward_call(*args, **kwargs)
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/opt.py", line 285, in forward
-[rank0]:     hidden_states, residual = layer(positions, hidden_states, residual)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-[rank0]:     return self._call_impl(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-[rank0]:     return forward_call(*args, **kwargs)
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/opt.py", line 172, in forward
-[rank0]:     hidden_states = self.self_attn(positions, hidden_states)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-[rank0]:     return self._call_impl(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-[rank0]:     return forward_call(*args, **kwargs)
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/opt.py", line 101, in forward
-[rank0]:     o = self.attn(q, k, v)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-[rank0]:     return self._call_impl(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-[rank0]:     return forward_call(*args, **kwargs)
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/layers/attention.py", line 139, in forward
-[rank0]:     o = flash_attn_varlen_func(q, k, v,
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/flash_attn/flash_attn_interface.py", line 1443, in flash_attn_varlen_func
-[rank0]:     return FlashAttnVarlenFunc.apply(
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/autograd/function.py", line 575, in apply
-[rank0]:     return super().apply(*args, **kwargs)  # type: ignore[misc]
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/flash_attn/flash_attn_interface.py", line 925, in forward
-[rank0]:     out_padded, softmax_lse, S_dmask, rng_state = _wrapped_flash_attn_varlen_forward(
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_ops.py", line 1116, in __call__
-[rank0]:     return self._op(*args, **(kwargs or {}))
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_library/autograd.py", line 113, in autograd_impl
-[rank0]:     result = forward_no_grad(*args, Metadata(keyset, keyword_only_args))
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_library/autograd.py", line 40, in forward_no_grad
-[rank0]:     result = op.redispatch(keyset & _C._after_autograd_keyset, *args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_ops.py", line 721, in redispatch
-[rank0]:     return self._handle.redispatch_boxed(keyset, *args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_library/custom_ops.py", line 324, in backend_impl
-[rank0]:     result = self._backend_fns[device_type](*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_compile.py", line 32, in inner
-[rank0]:     return disable_fn(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 632, in _fn
-[rank0]:     return fn(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_library/custom_ops.py", line 367, in wrapped_fn
-[rank0]:     return fn(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/flash_attn/flash_attn_interface.py", line 165, in _flash_attn_varlen_forward
-[rank0]:     out, softmax_lse, S_dmask, rng_state = flash_attn_gpu.varlen_fwd(
-[rank0]: RuntimeError: FlashAttention only support fp16 and bf16 data type
-✓ 检测到模型类型: opt
-🔧 标准化 OPT 配置...
-  ✓ 设置 num_key_value_heads = 40 (MHA)
-  ✓ 计算 head_dim = 128
-  ✓ 设置 intermediate_size = 20480 (from ffn_dim)
-  ✓ 设置 hidden_act = relu
-  ✓ 设置 rope_theta = 10000.0 (默认值)
-  ✓ 设置 rms_norm_eps = 1e-06 (默认值)
-  ✓ 设置 attention_bias = True
-✅ OPT 配置标准化完成
-层 0 已移动到设备 cuda:0
-层 1 已移动到设备 cuda:0
-层 2 已移动到设备 cuda:0
-层 3 已移动到设备 cuda:0
-层 4 已移动到设备 cuda:0
-层 5 已移动到设备 cuda:0
-层 6 已移动到设备 cuda:0
-层 7 已移动到设备 cuda:0
-层 8 已移动到设备 cuda:0
-层 9 已移动到设备 cuda:0
-层 10 已移动到设备 cuda:0
-层 11 已移动到设备 cuda:0
-层 12 已移动到设备 cuda:0
-层 13 已移动到设备 cuda:0
-层 14 已移动到设备 cuda:0
-层 15 已移动到设备 cuda:0
-层 16 已移动到设备 cuda:0
-层 17 已移动到设备 cuda:0
-层 18 已移动到设备 cuda:0
-层 19 已移动到设备 cuda:0
-层 20 已移动到设备 cuda:0
-层 21 已移动到设备 cuda:0
-层 22 已移动到设备 cuda:0
-层 23 已移动到设备 cuda:0
-层 24 已移动到设备 cuda:0
-层 25 已移动到设备 cuda:0
-层 26 已移动到设备 cuda:0
-层 27 已移动到设备 cuda:0
-层 28 已移动到设备 cuda:0
-层 29 已移动到设备 cuda:0
-层 30 已移动到设备 cuda:0
-层 31 已移动到设备 cuda:0
-层 32 已移动到设备 cuda:0
-层 33 已移动到设备 cuda:0
-层 34 已移动到设备 cuda:0
-层 35 已移动到设备 cuda:0
-层 36 已移动到设备 cuda:0
-层 37 已移动到设备 cuda:0
-层 38 已移动到设备 cuda:0
-层 39 已移动到设备 cuda:0
-Attention Offload: 层 10 Attention 已 offload：
-  原设备: cuda:0 (torch.float32)
-  目标设备: cuda:1 (torch.float32)
-  切分比例: 0.50
-  自适应调优: 禁用
+
+使用设备: device_a=cuda:0, device_b=cuda:1
+
+================================================================================
+单次优化操作总开销估算
+================================================================================
+
+================================================================================
+数据传输开销分析
+batch_size=4, seq_len=128, hidden_size=4096
+device_a=cuda:0, device_b=cuda:1
+================================================================================
+
+数据大小: 8.00 MB
+A -> B 传输时间: 26.563 ms (带宽: 301.17 GB/s)
+B -> A 传输时间: 0.096 ms (带宽: 83118.37 GB/s)
+往返总时间: 26.660 ms
+
+================================================================================
+切分/合并操作开销分析
+================================================================================
+切分操作: 0.011 ms
+合并操作: 0.057 ms
+总开销: 0.068 ms
+
+================================================================================
+Context切分开销分析
+================================================================================
+Context切分总开销: 0.137 ms
+  - cu_seqlens: 2个切片 + 1个clone + 1个减法
+  - slot_mapping: 2个切片
+  - context_lens: 2个切片
+  - block_tables: 2个切片
+  总计: ~8-10个小张量操作
+
+================================================================================
+Stream开销分析
+================================================================================
+创建2个stream: 0.150 ms
+同步2个stream (空): 0.004 ms
+总开销: 0.154 ms
+
+================================================================================
+总开销汇总:
+================================================================================
+data_transfer                 :   26.660 ms ( 98.7%)
+split_merge                   :    0.068 ms (  0.3%)
+context_split                 :    0.137 ms (  0.5%)
+stream                        :    0.154 ms (  0.6%)
+总计                            :   27.019 ms
+================================================================================
+
+结论:
+  每次优化操作的固定开销约为 27.02 ms
+  只有当并行计算节省的时间 > 27.02 ms 时，优化才有效
+  例如：如果单设备计算需要 20ms，则分片后每个设备需要 < -3.51 ms
