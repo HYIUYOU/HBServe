@@ -51,9 +51,9 @@
 [rank0]:     hidden_states, residual = self._forward_with_continuous_replication(
 [rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/qwen3.py", line 496, in _forward_with_continuous_replication
 [rank0]:     return execute_continuous_layer_replication(
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/utils/optimization_forward.py", line 1177, in execute_continuous_layer_replication
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/utils/optimization_forward.py", line 1183, in execute_continuous_layer_replication
 [rank0]:     out_a, res_out_a, out_b, res_out_b = _parallel_execute_split_layer_fast(
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/utils/optimization_forward.py", line 1733, in _parallel_execute_split_layer_fast
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/utils/optimization_forward.py", line 1751, in _parallel_execute_split_layer_fast
 [rank0]:     out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
 [rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
 [rank0]:     return self._call_impl(*args, **kwargs)
@@ -88,7 +88,7 @@
 [rank0]: For debugging consider passing CUDA_LAUNCH_BLOCKING=1
 [rank0]: Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
 
-Exception ignored in atexit callback: <bound method LLMEngine.exit of <HBserve.llm.LLM object at 0x7fb187f2fa00>>
+Exception ignored in atexit callback: <bound method LLMEngine.exit of <HBserve.llm.LLM object at 0x7f3792dc3a00>>
 Traceback (most recent call last):
   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/llm_engine.py", line 39, in exit
     self.model_runner.call("exit") # 调用model_runner中的exit方法
@@ -104,4 +104,4 @@ For debugging consider passing CUDA_LAUNCH_BLOCKING=1
 Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
 
 Generating:   0%|          | 0/10 [00:04<?, ?it/s]
-[rank0]:[W1106 17:33:54.776750559 ProcessGroupNCCL.cpp:1250] Warning: WARNING: process group has NOT been destroyed before we destruct ProcessGroupNCCL. On normal program exit, the application should call destroy_process_group to ensure that any pending NCCL operations have finished in this process. In rare cases this process can exit before this point and block the progress of another member of the process group. This constraint has always been present,  but this warning has only been added since PyTorch 2.4 (function operator())
+[rank0]:[W1106 17:40:53.298579994 ProcessGroupNCCL.cpp:1250] Warning: WARNING: process group has NOT been destroyed before we destruct ProcessGroupNCCL. On normal program exit, the application should call destroy_process_group to ensure that any pending NCCL operations have finished in this process. In rare cases this process can exit before this point and block the progress of another member of the process group. This constraint has always been present,  but this warning has only been added since PyTorch 2.4 (function operator())
