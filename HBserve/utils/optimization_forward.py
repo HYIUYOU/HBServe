@@ -244,11 +244,7 @@ def execute_kv_head_split_forward(
             context, offload_device, layer_id, False
         )
     
-    # 同步
-    if stream_0 is not None:
-        stream_0.synchronize()
-    if stream_1 is not None:
-        stream_1.synchronize()
+    # 移除同步操作以提高性能（NVLink优化）
     
     # === Output Projection ===
     o_0 = o_0.view(batch_size * seq_len, num_heads_0 * head_dim)
@@ -446,7 +442,7 @@ def execute_attention_offload_forward(
     
     if not should_enable:
         if DEBUG:
-            print(f"[NVLink][{func_name}] 跳过优化: {{reason}}")
+            print(f"[NVLink][execute_attention_offload_forward] 跳过优化: {reason}")
         # 直接使用原始执行路径
         
         return config['src_attn'](positions, hidden_states)
@@ -542,11 +538,7 @@ def execute_attention_offload_forward(
         set_context(**ctx_b)
         out_b = offload_attn(pos_b, hs_b)
     
-    # 同步
-    if stream_a is not None:
-        stream_a.synchronize()
-    if stream_b is not None:
-        stream_b.synchronize()
+    # 移除同步操作以提高性能（NVLink优化）
     
     # 恢复原始 context
     set_context(
@@ -648,7 +640,7 @@ def execute_layer_replication_forward(
     
     if not should_enable:
         if DEBUG:
-            print(f"[NVLink][{func_name}] 跳过优化: {{reason}}")
+            print(f"[NVLink][execute_layer_replication_forward] 跳过优化: {reason}")
         # 直接使用原始执行路径
         
         return layer(positions, hidden_states, residual)
@@ -864,11 +856,7 @@ def execute_layer_replication_forward(
         )
         out_b, res_out_b = replica(pos_b, hs_b, res_b)
     
-    # 同步
-    if stream_a is not None:
-        stream_a.synchronize()
-    if stream_b is not None:
-        stream_b.synchronize()
+    # 移除同步操作以提高性能（NVLink优化）
     
     # 恢复context
     set_context(
@@ -936,14 +924,14 @@ def execute_continuous_layer_replication(
     is_last_in_group: bool
 ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
     """
-    执行连续复制层组的前向传播（优化版）
+    执行连续复制层组的前向传播（高性能优化版）
     
-    关键设计：
-    - 第一层：切分 -> 并行计算 -> 合并返回 + 保存分片状态
-    - 中间层：检查分片状态 -> 直接用分片数据计算 -> 合并返回 + 更新分片状态
-    - 最后一层：检查分片状态 -> 直接用分片数据计算 -> 合并返回 + 清除分片状态
+    关键优化设计：
+    - 第一层：切分 -> 并行计算 -> **不合并** + 保存分片状态（避免跨设备传输）
+    - 中间层：直接用分片数据计算 -> **不合并** + 更新分片状态（数据保持在各自设备）
+    - 最后一层：直接用分片数据计算 -> **仅在此合并到原始设备** + 清除分片状态
     
-    **重要**：所有层都返回完整的合并张量，确保设备管理逻辑正常工作
+    **性能优势**：中间层完全避免跨设备数据传输和合并开销，充分利用NVLink并行性
     """
     
     # ===== NVLink优化：动态启用检查 =====
@@ -952,7 +940,7 @@ def execute_continuous_layer_replication(
     
     if not should_enable:
         if DEBUG:
-            print(f"[NVLink][{func_name}] 跳过优化: {{reason}}")
+            print(f"[NVLink][execute_continuous_layer_replication] 跳过优化: {reason}")
         # 直接使用原始执行路径
         
         return layer(positions, hidden_states, residual)
@@ -1016,18 +1004,22 @@ def execute_continuous_layer_replication(
         )
         
         # 并行执行
-        out_a, res_a, out_b, res_b = _parallel_execute_split_layer(
+        out_a, res_a, out_b, res_b = _parallel_execute_split_layer_no_sync(
             layer, replica, split_data, orig_ctx,
             layer_device, replica_device
         )
         
-        # **合并结果**
-        hidden_states, residual = _merge_split_outputs(
-            out_a, out_b, res_a, res_b, layer_device
-        )
-        
-        # 如果不是最后一层，保存分片状态供下一层使用
-        if not is_last_in_group:
+        # **性能优化**：只在最后一层合并，中间层保持分片状态
+        if is_last_in_group:
+            # 最后一层：合并到原始设备
+            hidden_states, residual = _merge_split_outputs(
+                out_a, out_b, res_a, res_b, layer_device
+            )
+            if DEBUG:
+                print(f"[ReplicaGroup][layer {layer_id}] Last layer - merged outputs")
+            return hidden_states, residual
+        else:
+            # 第一层/中间层：保存分片状态，不合并（避免跨设备传输）
             _save_split_state_to_context(
                 context,
                 split_idx=split_idx,
@@ -1044,8 +1036,8 @@ def execute_continuous_layer_replication(
                 device_a=layer_device,
                 device_b=replica_device
             )
-        
-        return hidden_states, residual
+            # 返回占位符（告知外部逻辑数据已分片）
+            return _create_split_output_placeholder(out_a, out_b, res_a, res_b, layer_device)
     
     # ===== 情况2：使用上一层的分片状态（中间层和最后一层） =====
     else:
@@ -1090,24 +1082,24 @@ def execute_continuous_layer_replication(
             'ctx_b': ctx_b
         }
         
-        # 并行执行
-        out_a, res_out_a, out_b, res_out_b = _parallel_execute_split_layer(
+        # 并行执行（无同步版本）
+        out_a, res_out_a, out_b, res_out_b = _parallel_execute_split_layer_no_sync(
             layer, replica, split_data, orig_ctx,
             layer_device, replica_device
         )
         
-        # **合并结果**
-        hidden_states, residual = _merge_split_outputs(
-            out_a, out_b, res_out_a, res_out_b, layer_device
-        )
-        
-        # 如果是最后一层，清除分片状态；否则更新分片状态
+        # **性能优化**：只在最后一层合并，中间层保持分片状态
         if is_last_in_group:
+            # 最后一层：合并到原始设备并清除分片状态
+            hidden_states, residual = _merge_split_outputs(
+                out_a, out_b, res_out_a, res_out_b, layer_device
+            )
             _clear_split_state_from_context(context)
             if DEBUG:
-                print(f"[ReplicaGroup][layer {layer_id}] Last layer - cleared split state")
+                print(f"[ReplicaGroup][layer {layer_id}] Last layer - merged and cleared split state")
+            return hidden_states, residual
         else:
-            # 更新分片状态供下一层使用
+            # 中间层：更新分片状态，不合并（避免跨设备传输）
             _save_split_state_to_context(
                 context,
                 split_idx=split_state['split_idx'],
@@ -1125,9 +1117,9 @@ def execute_continuous_layer_replication(
                 device_b=replica_device
             )
             if DEBUG:
-                print(f"[ReplicaGroup][layer {layer_id}] Updated split state for next layer")
-        
-        return hidden_states, residual
+                print(f"[ReplicaGroup][layer {layer_id}] Middle layer - updated split state (no merge)")
+            # 返回占位符
+            return _create_split_output_placeholder(out_a, out_b, res_out_a, res_out_b, layer_device)
 
 
 # ===== 辅助函数 =====
@@ -1338,11 +1330,7 @@ def _parallel_execute_split_layer(
         )
         out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
     
-    # 同步
-    if stream_a is not None:
-        stream_a.synchronize()
-    if stream_b is not None:
-        stream_b.synchronize()
+    # 移除同步操作以提高性能（NVLink优化）
     
     # 恢复原始 context
     set_context(
@@ -1371,23 +1359,28 @@ def _clear_split_state_from_context(context: Context):
     if hasattr(context, '_replica_split_state'):
         delattr(context, '_replica_split_state')
 
-def _create_split_output(
+def _create_split_output_placeholder(
     out_a: torch.Tensor,
     out_b: torch.Tensor,
     res_a: Optional[torch.Tensor],
-    res_b: Optional[torch.Tensor]
+    res_b: Optional[torch.Tensor],
+    target_device: torch.device
 ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
     """
-    创建假的合并输出（实际保持分片状态）
+    创建占位符输出（用于中间层，数据保持分片状态）
     
-    注意：返回的是占位符，真实数据在 context._replica_split_state 中
+    **NVLink优化**：返回轻量级占位符，避免跨设备数据传输和合并开销
+    真实数据保持在各自设备上（context._replica_split_state），利用NVLink异步传输
     """
-    # 返回空张量作为占位符（维度为0，不占显存）
-    placeholder_hs = torch.empty(0, dtype=out_a.dtype, device=out_a.device)
+    # 创建一个小的占位符张量（而不是空张量，避免某些代码检查维度时出错）
+    # 使用1个token的占位符，确保下游代码能正常处理维度
+    placeholder_hs = torch.zeros((1, out_a.size(-1) if out_a.dim() > 1 else out_a.size(0)), 
+                                  dtype=out_a.dtype, device=target_device)
     placeholder_res = None
     if res_a is not None or res_b is not None:
-        placeholder_res = torch.empty(0, dtype=(res_a if res_a is not None else res_b).dtype,
-                                     device=(res_a if res_a is not None else res_b).device)
+        res_ref = res_a if res_a is not None else res_b
+        placeholder_res = torch.zeros((1, res_ref.size(-1) if res_ref.dim() > 1 else res_ref.size(0)),
+                                      dtype=res_ref.dtype, device=target_device)
     
     return placeholder_hs, placeholder_res
 
@@ -1568,7 +1561,7 @@ def _move_split_data_to_devices(
     return split_data
 
 
-def _parallel_execute_split_layer(
+def _parallel_execute_split_layer_no_sync(
     layer_a: nn.Module,
     layer_b: nn.Module,
     split_data: Dict,
@@ -1576,7 +1569,7 @@ def _parallel_execute_split_layer(
     device_a: torch.device,
     device_b: torch.device
 ) -> tuple:
-    """并行执行分片层"""
+    """并行执行分片层（无同步优化版，用于连续层复制）"""
     stream_a = torch.cuda.Stream(device=device_a) if device_a.type == 'cuda' else None
     stream_b = torch.cuda.Stream(device=device_b) if device_b.type == 'cuda' else None
     
@@ -1634,11 +1627,79 @@ def _parallel_execute_split_layer(
         )
         out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
     
-    # 同步
+    # **关键NVLink优化**：不恢复context，不同步
+    # 数据保持在各自设备上，利用NVLink异步传输，最大化并行性
+    
+    return out_a, res_a, out_b, res_b
+
+
+def _parallel_execute_split_layer(
+    layer_a: nn.Module,
+    layer_b: nn.Module,
+    split_data: Dict,
+    orig_ctx: Context,
+    device_a: torch.device,
+    device_b: torch.device
+) -> tuple:
+    """并行执行分片层（用于非连续层复制）"""
+    stream_a = torch.cuda.Stream(device=device_a) if device_a.type == 'cuda' else None
+    stream_b = torch.cuda.Stream(device=device_b) if device_b.type == 'cuda' else None
+    
+    # 执行 A
     if stream_a is not None:
-        stream_a.synchronize()
+        with torch.cuda.stream(stream_a):
+            set_context(
+                is_prefill=orig_ctx.is_prefill,
+                cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
+                cu_seqlens_k=split_data['ctx_a']['cu_seqlens_k'],
+                max_seqlen_q=orig_ctx.max_seqlen_q,
+                max_seqlen_k=orig_ctx.max_seqlen_k,
+                slot_mapping=split_data['ctx_a']['slot_mapping'],
+                context_lens=split_data['ctx_a']['context_lens'],
+                block_tables=split_data['ctx_a']['block_tables']
+            )
+            out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
+    else:
+        set_context(
+            is_prefill=orig_ctx.is_prefill,
+            cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
+            cu_seqlens_k=split_data['ctx_a']['cu_seqlens_k'],
+            max_seqlen_q=orig_ctx.max_seqlen_q,
+            max_seqlen_k=orig_ctx.max_seqlen_k,
+            slot_mapping=split_data['ctx_a']['slot_mapping'],
+            context_lens=split_data['ctx_a']['context_lens'],
+            block_tables=split_data['ctx_a']['block_tables']
+        )
+        out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
+    
+    # 执行 B
     if stream_b is not None:
-        stream_b.synchronize()
+        with torch.cuda.stream(stream_b):
+            set_context(
+                is_prefill=orig_ctx.is_prefill,
+                cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
+                cu_seqlens_k=split_data['ctx_b']['cu_seqlens_k'],
+                max_seqlen_q=orig_ctx.max_seqlen_q,
+                max_seqlen_k=orig_ctx.max_seqlen_k,
+                slot_mapping=split_data['ctx_b']['slot_mapping'],
+                context_lens=split_data['ctx_b']['context_lens'],
+                block_tables=split_data['ctx_b']['block_tables']
+            )
+            out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
+    else:
+        set_context(
+            is_prefill=orig_ctx.is_prefill,
+            cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
+            cu_seqlens_k=split_data['ctx_b']['cu_seqlens_k'],
+            max_seqlen_q=orig_ctx.max_seqlen_q,
+            max_seqlen_k=orig_ctx.max_seqlen_k,
+            slot_mapping=split_data['ctx_b']['slot_mapping'],
+            context_lens=split_data['ctx_b']['context_lens'],
+            block_tables=split_data['ctx_b']['block_tables']
+        )
+        out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
+    
+    # 移除同步操作以提高性能（NVLink优化）
     
     # 恢复原始 context
     set_context(
@@ -1662,12 +1723,21 @@ def _merge_split_outputs(
     res_b: Optional[torch.Tensor],
     target_device: torch.device
 ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-    """合并分片输出"""
+    """
+    合并分片输出（NVLink优化版）
+    
+    **性能优化**：
+    1. 使用 non_blocking=True 充分利用 NVLink 异步传输
+    2. 避免不必要的同步操作
+    3. 只在最后一层调用此函数
+    """
+    # NVLink优化：使用非阻塞传输
     if out_b.device != target_device:
         out_b = out_b.to(target_device, non_blocking=True)
     if res_b is not None and res_b.device != target_device:
         res_b = res_b.to(target_device, non_blocking=True)
     
+    # 合并张量
     hidden_states = torch.cat([out_a, out_b], dim=0)
     
     if res_a is None and res_b is None:
