@@ -1,377 +1,166 @@
 `torch_dtype` is deprecated! Use `dtype` instead!
-================================================================================
-测试 KV Head Split 修复
-================================================================================
+✓ 检测到模型类型: qwen3
+层 1 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 1 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 2 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 2 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 3 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 3 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 4 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 4 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 5 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 5 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 6 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 6 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 7 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 7 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 8 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 8 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 9 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 9 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+Generating:   0%|          | 0/10 [00:00<?, ?it/s][rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/example_replication_autotune.py", line 78, in <module>
+[rank0]:     main()
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/example_replication_autotune.py", line 69, in main
+[rank0]:     outputs = llm.generate(prompts, sampling_params)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/llm_engine.py", line 77, in generate
+[rank0]:     output, num_tokens = self.step()
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/llm_engine.py", line 52, in step
+[rank0]:     token_ids = self.model_runner.call("run", seqs, is_prefill)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/model_runner.py", line 91, in call
+[rank0]:     return method(*args)   
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/model_runner.py", line 233, in run
+[rank0]:     logits = self.run_model(input_ids, positions, is_prefill)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
+[rank0]:     return func(*args, **kwargs)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/model_runner.py", line 210, in run_model
+[rank0]:     return self.model.compute_logits(self.model(input_ids, positions))
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/qwen3.py", line 537, in forward
+[rank0]:     hidden_states = self.model(input_ids, positions) # 注意这里的input_ids不包含prefix caching命中的部分
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/qwen3.py", line 281, in forward
+[rank0]:     hidden_states, residual = self._forward_with_continuous_replication(
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/qwen3.py", line 496, in _forward_with_continuous_replication
+[rank0]:     return execute_continuous_layer_replication(
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/utils/optimization_forward.py", line 946, in execute_continuous_layer_replication
+[rank0]:     return layer(positions, hidden_states, residual)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/qwen3.py", line 171, in forward
+[rank0]:     hidden_states = self.self_attn(positions, hidden_states) # 将positions传入attention计算
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/qwen3.py", line 99, in forward
+[rank0]:     q, k = self.rotary_emb(positions, q, k) # 根据position进行旋转位置编码，因为RoPE为绝对位置编码，因此可以这么做
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/layers/rotary_embedding.py", line 98, in forward
+[rank0]:     return impl(positions.to(target_device), query.to(target_device), key.to(target_device))
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 465, in _fn
+[rank0]:     return fn(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1269, in __call__
+[rank0]:     return self._torchdynamo_orig_callable(
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1064, in __call__
+[rank0]:     result = self._inner_convert(
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 526, in __call__
+[rank0]:     return _compile(
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 924, in _compile
+[rank0]:     guarded_code = compile_inner(code, one_graph, hooks, transform)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 666, in compile_inner
+[rank0]:     return _compile_inner(code, one_graph, hooks, transform)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_utils_internal.py", line 87, in wrapper_function
+[rank0]:     return function(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 699, in _compile_inner
+[rank0]:     out_code = transform_code_object(code, transform)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/bytecode_transformation.py", line 1322, in transform_code_object
+[rank0]:     transformations(instructions, code_options)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 219, in _fn
+[rank0]:     return fn(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 634, in transform
+[rank0]:     tracer.run()
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 2796, in run
+[rank0]:     super().run()
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 983, in run
+[rank0]:     while self.step():
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 895, in step
+[rank0]:     self.dispatch_table[inst.opcode](self, inst)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 582, in wrapper
+[rank0]:     return inner_fn(self, inst)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 1602, in CALL_FUNCTION
+[rank0]:     self.call_function(fn, args, {})
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 830, in call_function
+[rank0]:     self.push(fn.call_function(self, args, kwargs))  # type: ignore[arg-type]
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/variables/misc.py", line 1024, in call_function
+[rank0]:     return self.obj.call_method(tx, self.name, args, kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/variables/tensor.py", line 535, in call_method
+[rank0]:     return wrap_fx_proxy(
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/variables/builder.py", line 2037, in wrap_fx_proxy
+[rank0]:     return wrap_fx_proxy_cls(target_cls=TensorVariable, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/variables/builder.py", line 2124, in wrap_fx_proxy_cls
+[rank0]:     example_value = get_fake_value(proxy.node, tx, allow_non_graph_fake=True)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/utils.py", line 2082, in get_fake_value
+[rank0]:     raise TorchRuntimeError(str(e)).with_traceback(e.__traceback__) from None
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/utils.py", line 2017, in get_fake_value
+[rank0]:     ret_val = wrap_fake_exception(
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/utils.py", line 1574, in wrap_fake_exception
+[rank0]:     return fn()
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/utils.py", line 2018, in <lambda>
+[rank0]:     lambda: run_node(tx.output, node, args, kwargs, nnmodule)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/utils.py", line 2150, in run_node
+[rank0]:     raise RuntimeError(make_error_message(e)).with_traceback(
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/utils.py", line 2134, in run_node
+[rank0]:     return getattr(args[0], node.target)(*args[1:], **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/utils/_device.py", line 106, in __torch_function__
+[rank0]:     return func(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/utils/_stats.py", line 21, in wrapper
+[rank0]:     return fn(*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_subclasses/fake_tensor.py", line 1238, in __torch_dispatch__
+[rank0]:     return self.dispatch(func, types, args, kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_subclasses/fake_tensor.py", line 1692, in dispatch
+[rank0]:     return self._cached_dispatch_impl(func, types, args, kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_subclasses/fake_tensor.py", line 1339, in _cached_dispatch_impl
+[rank0]:     output = self._dispatch_impl(func, types, args, kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_subclasses/fake_tensor.py", line 1943, in _dispatch_impl
+[rank0]:     return decomposition_table[func](*args, **kwargs)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_refs/__init__.py", line 4591, in view
+[rank0]:     return _reshape_view_helper(a, *shape, allow_copy=False)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_refs/__init__.py", line 3659, in _reshape_view_helper
+[rank0]:     shape = utils.infer_size(shape, a.numel())
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_prims_common/__init__.py", line 917, in infer_size
+[rank0]:     torch._check(
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/__init__.py", line 1564, in _check
+[rank0]:     _check_with(RuntimeError, cond, message)
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/__init__.py", line 1546, in _check_with
+[rank0]:     raise error_type(message_evaluated)
+[rank0]: torch._dynamo.exc.TorchRuntimeError: Failed running call_method view(*(FakeTensor(..., device='cuda:0', size=(1, 8192), dtype=torch.bfloat16), s0, -1, 128), **{}):
+[rank0]: shape '[s0, -1, 128]' is invalid for input of size 8192
 
-1. 加载模型: /home/admin/workspace/aop_lab/app_data/.cache/models--facebook--opt-13b/snapshots/e515202d1e7750da62d245fbccb2723b9c1790f5
-✓ 检测到模型类型: opt
-🔧 标准化 OPT 配置...
-  ✓ 设置 num_key_value_heads = 40 (MHA)
-  ✓ 计算 head_dim = 128
-  ✓ 设置 intermediate_size = 20480 (from ffn_dim)
-  ✓ 设置 hidden_act = relu
-  ✓ 设置 rope_theta = 10000.0 (默认值)
-  ✓ 设置 rms_norm_eps = 1e-06 (默认值)
-  ✓ 设置 attention_bias = True
-✅ OPT 配置标准化完成
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=None v_cache.dev=None
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call flash_attn_varlen_func
+[rank0]: from user code:
+[rank0]:    File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/layers/rotary_embedding.py", line 50, in forward
+[rank0]:     query = query.view(num_tokens, -1, self.head_size)
 
-2. 配置 KV Head Split...
-   配置层 10...
-KV Head Split: 层 10 Attention 已按 KV Head 切分：
-  原设备 cuda:0: Q heads [0:20], KV heads [0:20]
-  目标设备 cuda:1: Q heads [20:40], KV heads [20:40]
-   配置层 11...
-KV Head Split: 层 11 Attention 已按 KV Head 切分：
-  原设备 cuda:0: Q heads [0:20], KV heads [0:20]
-  目标设备 cuda:1: Q heads [20:40], KV heads [20:40]
-   配置层 12...
-KV Head Split: 层 12 Attention 已按 KV Head 切分：
-  原设备 cuda:0: Q heads [0:20], KV heads [0:20]
-  目标设备 cuda:1: Q heads [20:40], KV heads [20:40]
+[rank0]: Set TORCH_LOGS="+dynamo" and TORCHDYNAMO_VERBOSE=1 for more information
 
-3. 准备测试输入...
 
-4. 开始推理...
---------------------------------------------------------------------------------
-Generating:   0%|          | 0/2 [00:00<?, ?it/s]Traceback (most recent call last):
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/triton/language/core.py", line 35, in wrapper
-    return fn(*args, **kwargs)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/triton/language/core.py", line 1192, in arange
-    return semantic.arange(start, end, _builder)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/triton/language/semantic.py", line 512, in arange
-    raise ValueError("arange's range must be a power of 2")
-ValueError: arange's range must be a power of 2
+[rank0]: You can suppress this exception and fall back to eager by setting:
+[rank0]:     import torch._dynamo
+[rank0]:     torch._dynamo.config.suppress_errors = True
 
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/home/admin/workspace/aop_lab/app_source/HBServe/test_kv_head_fix.py", line 45, in main
-    outputs = llm.generate(prompts, sampling_params)
-  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/llm_engine.py", line 77, in generate
-    output, num_tokens = self.step()
-  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/llm_engine.py", line 52, in step
-    token_ids = self.model_runner.call("run", seqs, is_prefill)
-  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/model_runner.py", line 91, in call
-    return method(*args)
-  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/model_runner.py", line 233, in run
-    logits = self.run_model(input_ids, positions, is_prefill)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
-    return func(*args, **kwargs)
-  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/model_runner.py", line 210, in run_model
-    return self.model.compute_logits(self.model(input_ids, positions))
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-    return forward_call(*args, **kwargs)
-  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/opt.py", line 467, in forward
-    hidden_states = self.model(input_ids, positions)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-    return forward_call(*args, **kwargs)
-  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/opt.py", line 285, in forward
-    hidden_states, residual = layer(positions, hidden_states, residual)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-    return forward_call(*args, **kwargs)
-  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/opt.py", line 172, in forward
-    hidden_states = self.self_attn(positions, hidden_states)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-    return forward_call(*args, **kwargs)
-  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/opt.py", line 101, in forward
-    o = self.attn(q, k, v)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-    return forward_call(*args, **kwargs)
-  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/layers/attention.py", line 125, in forward
-    store_kvcache(k, v, k_cache_dev, v_cache_dev, context.slot_mapping) # 将新计算得到的KV存储到KV Cache中
-  File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/layers/attention.py", line 51, in store_kvcache
-    store_kvcache_kernel[(N,)](key, key.stride(0), value, value.stride(0),
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/triton/runtime/jit.py", line 345, in <lambda>
-    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/triton/runtime/jit.py", line 662, in run
-    kernel = self.compile(
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/triton/compiler/compiler.py", line 276, in compile
-    module = src.make_ir(options, codegen_fns, context)
-  File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/triton/compiler/compiler.py", line 113, in make_ir
-    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
-triton.compiler.errors.CompilationError: at 12:37:
-def store_kvcache_kernel(
-    key_ptr,
-    key_stride, # key.stride(0) = num_heads * head_dim == D 一个key的size
-    value_ptr, # 新计算得到的V
-    value_stride, # value.stride(0) = num_heads * head_dim == D
-    k_cache_ptr,
-    v_cache_ptr,
-    slot_mapping_ptr,
-    D: tl.constexpr,
-):
-    idx = tl.program_id(0) # 表示当前的线程id
-    key_offsets = idx * key_stride + tl.arange(0, D)
-                                     ^
-Generating:   0%|          | 0/2 [00:00<?, ?it/s]
-[HB-Debug][Attention] set current device -> cuda:0
-[HB-Debug][Attention] q.dev=cuda:0 k.dev=cuda:0 v.dev=cuda:0 q.is_cuda=True
-[HB-Debug][Attention] slot_mapping.dev=cuda:0 is_cuda=True
-[HB-Debug][Attention] k_cache.dev=cuda:0 v_cache.dev=cuda:0
-[HB-Debug][Attention] contig q=True k=True v=True
-[HB-Debug][Attention] call store_kvcache
-
-✗ 推理失败: at 12:37:
-def store_kvcache_kernel(
-    key_ptr,
-    key_stride, # key.stride(0) = num_heads * head_dim == D 一个key的size
-    value_ptr, # 新计算得到的V
-    value_stride, # value.stride(0) = num_heads * head_dim == D
-    k_cache_ptr,
-    v_cache_ptr,
-    slot_mapping_ptr,
-    D: tl.constexpr,
-):
-    idx = tl.program_id(0) # 表示当前的线程id
-    key_offsets = idx * key_stride + tl.arange(0, D)
-                                     ^
+Generating:   0%|          | 0/10 [00:03<?, ?it/s]
