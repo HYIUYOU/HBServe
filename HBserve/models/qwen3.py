@@ -246,8 +246,24 @@ class Qwen3Model(ModelOptimizationMixin, nn.Module):
         # 获取 context
         context = get_context()
         is_prefill = context.is_prefill
-        
+
+        # ===== 新增：检测连续的复制层序列 =====
+        replica_groups = self._get_replica_layer_groups()
+
         for layer_id, layer in enumerate(self.layers):
+            # 检查当前层是否在某个连续复制组中
+            in_replica_group = False
+            group_info = None
+            
+            for group in replica_groups:
+                if layer_id in group['layer_ids']:
+                    in_replica_group = True
+                    group_info = {
+                        'is_first': layer_id == group['layer_ids'][0],
+                        'is_last': layer_id == group['layer_ids'][-1],
+                        'device': group['device']
+                    }
+                    break
             # ===== 1. 设备管理 =====
             layer_device = self.get_layer_device(layer_id)
             current_device = hidden_states.device
@@ -260,8 +276,14 @@ class Qwen3Model(ModelOptimizationMixin, nn.Module):
             
             # ===== 2. 检查并应用优化策略 =====
             
+            # 层复制：连续复制层需要特殊处理
+            if in_replica_group:
+                hidden_states, residual = self._forward_with_continuous_replication(
+                    layer_id, layer, positions, hidden_states, residual, context,
+                    group_info
+                )
             # 优先级 1: KV Head Split（最细粒度的优化）
-            if layer_id in self.attention_offload and \
+            elif layer_id in self.attention_offload and \
                self.attention_offload[layer_id].get('type') == 'kv_head_split':
                 hidden_states, residual = self._forward_with_kv_head_split(
                     layer_id, layer, positions, hidden_states, residual, context
@@ -273,11 +295,11 @@ class Qwen3Model(ModelOptimizationMixin, nn.Module):
                     layer_id, layer, positions, hidden_states, residual, context
                 )
             
-            # 优先级 3: Layer Replication
-            elif layer_id in self.replicas:
-                hidden_states, residual = self._forward_with_layer_replication(
-                    layer_id, layer, positions, hidden_states, residual, context
-                )
+            # # 优先级 3: Layer Replication
+            # elif layer_id in self.replicas:
+            #     hidden_states, residual = self._forward_with_layer_replication(
+            #         layer_id, layer, positions, hidden_states, residual, context
+            #     )
             
             # 默认: 正常前向传播
             else:
@@ -380,6 +402,112 @@ class Qwen3Model(ModelOptimizationMixin, nn.Module):
             self.replica_autotune.get(layer_id),
             self.get_layer_device(layer_id),
             self._sync_kv_cache_for_decode
+        )
+    def _get_replica_layer_groups(self) -> list:
+        """
+        检测连续的复制层组
+        
+        Returns:
+            List of groups, each group is:
+            {
+                'layer_ids': [1, 2, 3, ...],  # 连续的层ID
+                'device': torch.device,         # 复制到的设备
+                'split_ratio': float            # 平均切分比例
+            }
+        """
+        if not self.replicas:
+            return []
+        
+        groups = []
+        current_group = None
+        
+        sorted_layer_ids = sorted(self.replicas.keys())
+        
+        for layer_id in sorted_layer_ids:
+            replica_device = self.replica_devices[layer_id]
+            
+            if current_group is None:
+                # 开始新组
+                current_group = {
+                    'layer_ids': [layer_id],
+                    'device': replica_device,
+                    'split_ratios': [self.replica_split_ratio[layer_id]]
+                }
+            else:
+                # 检查是否连续且设备相同
+                if (layer_id == current_group['layer_ids'][-1] + 1 and
+                    replica_device == current_group['device']):
+                    # 加入当前组
+                    current_group['layer_ids'].append(layer_id)
+                    current_group['split_ratios'].append(self.replica_split_ratio[layer_id])
+                else:
+                    # 保存当前组，开始新组
+                    groups.append(current_group)
+                    current_group = {
+                        'layer_ids': [layer_id],
+                        'device': replica_device,
+                        'split_ratios': [self.replica_split_ratio[layer_id]]
+                    }
+        
+        # 保存最后一组
+        if current_group is not None:
+            groups.append(current_group)
+        
+        return groups
+
+
+    def _forward_with_continuous_replication(
+        self,
+        layer_id: int,
+        layer: nn.Module,
+        positions: torch.Tensor,
+        hidden_states: torch.Tensor,
+        residual: Optional[torch.Tensor],
+        context: Context,
+        group_info: dict
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        处理连续复制层组中的单层
+        
+        Args:
+            layer_id: 当前层ID
+            layer: 当前层模块
+            positions: 位置张量
+            hidden_states: 隐藏状态
+            residual: 残差
+            context: 上下文
+            group_info: {
+                'is_first': bool,     # 是否是组内第一层
+                'is_last': bool,      # 是否是组内最后一层
+                'device': torch.device  # 复制设备
+            }
+        
+        Returns:
+            (hidden_states, residual)
+        """
+        from HBserve.utils.optimization_forward import execute_continuous_layer_replication
+        
+        replica = self.replicas[layer_id]
+        replica_device = self.replica_devices[layer_id]
+        split_ratio = self.replica_split_ratio[layer_id]
+        autotune_config = self.replica_autotune.get(layer_id)
+        layer_device = self.get_layer_device(layer_id)
+        
+        return execute_continuous_layer_replication(
+            layer_id=layer_id,
+            layer=layer,
+            positions=positions,
+            hidden_states=hidden_states,
+            residual=residual,
+            context=context,
+            replica=replica,
+            replica_device=replica_device,
+            split_ratio=split_ratio,
+            autotune_config=autotune_config,
+            layer_device=layer_device,
+            sync_kv_cache_fn=self._sync_kv_cache_for_decode,
+            is_first_in_group=group_info['is_first'],
+            is_last_in_group=group_info['is_last']
         )
 @register_model("qwen3") 
 class Qwen3ForCausalLM(nn.Module):

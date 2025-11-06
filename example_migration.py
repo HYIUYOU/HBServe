@@ -9,7 +9,7 @@ os.environ['HB_REPLICA_LOG'] = '0'
 
 def main():
     # 与 example.py 保持一致的加载方式
-    path = os.path.expanduser("../Qwen3-0.6B")
+    path = os.path.expanduser("/home/admin/workspace/aop_lab/app_data/.cache/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218")
     tokenizer = AutoTokenizer.from_pretrained(path)
     llm = LLM(path, enforce_eager=True, tensor_parallel_size=1,gpu_memory_utilization=0.6)
 
@@ -20,13 +20,13 @@ def main():
             if hasattr(llm, 'model_runner') and hasattr(llm.model_runner, 'model') and hasattr(llm.model_runner.model, 'model'):
                 model = llm.model_runner.model.model
                 # 单层移动
-                model.move_layer_to_device(9, 'cuda:1')
+                # model.move_layer_to_device(9, 'cuda:1')
 
                 # 批量分配
                 model.set_layer_device_distribution({
                     9: 'cuda:1',
                     10: 'cuda:1',
-                    15: 'cuda:2'
+                    11: 'cuda:1'
                 })
                 
         else:
@@ -34,7 +34,7 @@ def main():
     except Exception as e:
         print(f"配置复制/自适应失败: {e}")
 
-    sampling_params = SamplingParams(temperature=0.6, max_tokens=128)
+    sampling_params = SamplingParams(temperature=0.6, max_tokens=256)
     prompts = [
         "introduce yourself",
         "describe the benefits of model parallelism",
