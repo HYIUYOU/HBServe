@@ -976,9 +976,26 @@ def execute_continuous_layer_replication(
     if not should_enable:
         if DEBUG:
             print(f"[NVLink][execute_continuous_layer_replication] 跳过优化: {reason}")
-        # 清除分片状态（因为要回退到正常路径）
-        if split_state is not None:
-            _clear_split_state_from_context(context)
+        # **关键修复**：如果是最后一层且有分片状态，必须恢复原始 context
+        # 因为中间层可能已经修改了 context，最后一层要保证后续普通层有正确的 context
+        if is_last_in_group and split_state is not None:
+            orig_ctx = split_state.get('orig_ctx')
+            if orig_ctx is not None:
+                set_context(
+                    is_prefill=orig_ctx.is_prefill,
+                    cu_seqlens_q=orig_ctx.cu_seqlens_q,
+                    cu_seqlens_k=orig_ctx.cu_seqlens_k,
+                    max_seqlen_q=orig_ctx.max_seqlen_q,
+                    max_seqlen_k=orig_ctx.max_seqlen_k,
+                    slot_mapping=orig_ctx.slot_mapping,
+                    context_lens=orig_ctx.context_lens,
+                    block_tables=orig_ctx.block_tables
+                )
+                if DEBUG:
+                    print(f"[ReplicaGroup][layer {layer_id}] Fallback: restored original context")
+        # 清除分片状态（无论是否是最后一层）
+        # 因为跳过优化意味着退出连续复制优化路径，必须清理状态
+        _clear_split_state_from_context(context)
         # 使用恢复后的真实数据执行原始路径
         return layer(positions, hidden_states, residual)
 
@@ -1018,10 +1035,25 @@ def execute_continuous_layer_replication(
            token_split_idx <= 0 or token_split_idx >= hidden_states.size(0):
             if DEBUG:
                 print(f"[ReplicaGroup][layer {layer_id}] Invalid split, fallback")
+            # **关键修复**：如果是最后一层，必须恢复原始 context
+            if is_last_in_group:
+                set_context(
+                    is_prefill=orig_ctx.is_prefill,
+                    cu_seqlens_q=orig_ctx.cu_seqlens_q,
+                    cu_seqlens_k=orig_ctx.cu_seqlens_k,
+                    max_seqlen_q=orig_ctx.max_seqlen_q,
+                    max_seqlen_k=orig_ctx.max_seqlen_k,
+                    slot_mapping=orig_ctx.slot_mapping,
+                    context_lens=orig_ctx.context_lens,
+                    block_tables=orig_ctx.block_tables
+                )
+                if DEBUG:
+                    print(f"[ReplicaGroup][layer {layer_id}] Fallback: restored original context")
+            # 清除分片状态（无论是否是最后一层）
+            # 因为要退出优化路径，必须确保状态干净
+            _clear_split_state_from_context(context)
             # 不使用分片，直接执行
             result = layer(positions, hidden_states, residual)
-            if not is_last_in_group:
-                _clear_split_state_from_context(context)  # 确保清除可能存在的旧状态
             return result
         
         # 同步 KV cache（decode 阶段）
@@ -1047,12 +1079,24 @@ def execute_continuous_layer_replication(
         
         # **性能优化**：只在最后一层合并，中间层保持分片状态
         if is_last_in_group:
+            # **关键修复**：最后一层必须恢复原始 context
+            # 因为后续的普通层需要正确的 context（如 slot_mapping）
+            set_context(
+                is_prefill=orig_ctx.is_prefill,
+                cu_seqlens_q=orig_ctx.cu_seqlens_q,
+                cu_seqlens_k=orig_ctx.cu_seqlens_k,
+                max_seqlen_q=orig_ctx.max_seqlen_q,
+                max_seqlen_k=orig_ctx.max_seqlen_k,
+                slot_mapping=orig_ctx.slot_mapping,
+                context_lens=orig_ctx.context_lens,
+                block_tables=orig_ctx.block_tables
+            )
             # 最后一层：合并到原始设备
             hidden_states, residual = _merge_split_outputs(
                 out_a, out_b, res_a, res_b, layer_device
             )
             if DEBUG:
-                print(f"[ReplicaGroup][layer {layer_id}] Last layer - merged outputs")
+                print(f"[ReplicaGroup][layer {layer_id}] Last layer - merged outputs and restored context")
             return hidden_states, residual
         else:
             # 第一层/中间层：保存分片状态，不合并（避免跨设备传输）
@@ -1126,13 +1170,25 @@ def execute_continuous_layer_replication(
         
         # **性能优化**：只在最后一层合并，中间层保持分片状态
         if is_last_in_group:
+            # **关键修复**：最后一层必须恢复原始 context
+            # 因为后续的普通层需要正确的 context（如 slot_mapping）
+            set_context(
+                is_prefill=orig_ctx.is_prefill,
+                cu_seqlens_q=orig_ctx.cu_seqlens_q,
+                cu_seqlens_k=orig_ctx.cu_seqlens_k,
+                max_seqlen_q=orig_ctx.max_seqlen_q,
+                max_seqlen_k=orig_ctx.max_seqlen_k,
+                slot_mapping=orig_ctx.slot_mapping,
+                context_lens=orig_ctx.context_lens,
+                block_tables=orig_ctx.block_tables
+            )
             # 最后一层：合并到原始设备并清除分片状态
             hidden_states, residual = _merge_split_outputs(
                 out_a, out_b, res_out_a, res_out_b, layer_device
             )
             _clear_split_state_from_context(context)
             if DEBUG:
-                print(f"[ReplicaGroup][layer {layer_id}] Last layer - merged and cleared split state")
+                print(f"[ReplicaGroup][layer {layer_id}] Last layer - merged, restored context, and cleared split state")
             return hidden_states, residual
         else:
             # 中间层：更新分片状态，不合并（避免跨设备传输）
