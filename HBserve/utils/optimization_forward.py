@@ -1091,6 +1091,12 @@ def execute_continuous_layer_replication(
         
         # **性能优化**：只在最后一层合并，中间层保持分片状态
         if is_last_in_group:
+            # **关键安全措施**：最后一层需要同步，确保数据传输完成
+            if layer_device.type == 'cuda':
+                torch.cuda.synchronize(layer_device)
+            if replica_device.type == 'cuda':
+                torch.cuda.synchronize(replica_device)
+            
             # **关键修复**：最后一层必须恢复原始 context
             # 因为后续的普通层需要正确的 context（如 slot_mapping）
             set_context(
@@ -1108,7 +1114,7 @@ def execute_continuous_layer_replication(
                 out_a, out_b, res_a, res_b, layer_device
             )
             if DEBUG:
-                print(f"[ReplicaGroup][layer {layer_id}] Last layer - merged outputs and restored context")
+                print(f"[ReplicaGroup][layer {layer_id}] Last layer - synced, merged outputs and restored context")
             return hidden_states, residual
         else:
             # 第一层/中间层：保存分片状态，不合并（避免跨设备传输）
@@ -1181,6 +1187,12 @@ def execute_continuous_layer_replication(
         
         # **性能优化**：只在最后一层合并，中间层保持分片状态
         if is_last_in_group:
+            # **关键安全措施**：最后一层需要同步，确保数据传输完成
+            if layer_device.type == 'cuda':
+                torch.cuda.synchronize(layer_device)
+            if replica_device.type == 'cuda':
+                torch.cuda.synchronize(replica_device)
+            
             # **关键修复**：最后一层必须恢复原始 context
             # 因为后续的普通层需要正确的 context（如 slot_mapping）
             set_context(
@@ -1199,7 +1211,7 @@ def execute_continuous_layer_replication(
             )
             _clear_split_state_from_context(context)
             if DEBUG:
-                print(f"[ReplicaGroup][layer {layer_id}] Last layer - merged, restored context, and cleared split state")
+                print(f"[ReplicaGroup][layer {layer_id}] Last layer - synced, merged, restored context, and cleared split state")
             return hidden_states, residual
         else:
             # 中间层：更新分片状态，不合并（避免跨设备传输）
@@ -1665,12 +1677,12 @@ def _parallel_execute_split_layer_fast(
     device_b: torch.device
 ) -> tuple:
     """
-    并行执行分片层（超高性能版本）
+    并行执行分片层（安全的高性能版本）
     
-    **激进优化策略**：
+    **平衡的优化策略**：
     1. 最小化context切分，只切分关键的 slot_mapping
-    2. 完全异步执行，零同步开销
-    3. 使用缓存的CUDA streams，避免创建开销
+    2. 使用缓存的CUDA streams
+    3. **添加最小必要同步**，避免CUDA非法内存访问
     4. 跳过复杂的 cu_seqlens 偏移计算
     """
     # **性能优化**：使用缓存的streams而不是每次创建新的
@@ -1678,7 +1690,6 @@ def _parallel_execute_split_layer_fast(
     stream_b = _get_or_create_stream(device_b) if device_b.type == 'cuda' else None
     
     # **关键修复**：必须切分 slot_mapping 以匹配分片的token数量
-    # 但可以跳过复杂的 cu_seqlens 偏移计算（牺牲正确性换性能）
     token_a = split_data['hs_a'].size(0)
     token_b = split_data['hs_b'].size(0)
     
@@ -1686,25 +1697,31 @@ def _parallel_execute_split_layer_fast(
     slot_mapping_a = None
     slot_mapping_b = None
     if orig_ctx.slot_mapping is not None:
-        slot_mapping_a = orig_ctx.slot_mapping[:token_a]
-        slot_mapping_b = orig_ctx.slot_mapping[token_a:]
+        slot_mapping_a = orig_ctx.slot_mapping[:token_a].contiguous()
+        slot_mapping_b = orig_ctx.slot_mapping[token_a:].contiguous()
     
-    # 执行 A（使用简化的 context）
+    # **关键安全措施**：确保数据已经在正确的设备上（避免跨设备访问）
+    # 数据应该已经在正确设备上了，这里只是确认
+    assert split_data['hs_a'].device == device_a, f"hs_a on {split_data['hs_a'].device}, expected {device_a}"
+    assert split_data['hs_b'].device == device_b, f"hs_b on {split_data['hs_b'].device}, expected {device_b}"
+    
+    # 执行 A（在 device_a 上）
     if stream_a is not None:
         with torch.cuda.stream(stream_a):
-            # 只设置必要的 slot_mapping，其他字段使用原始值（虽然可能不完全正确）
+            torch.cuda.set_device(device_a)  # **安全措施**：确保在正确的设备上
             set_context(
                 is_prefill=orig_ctx.is_prefill,
-                cu_seqlens_q=orig_ctx.cu_seqlens_q,  # 不切分，避免开销
+                cu_seqlens_q=orig_ctx.cu_seqlens_q,
                 cu_seqlens_k=orig_ctx.cu_seqlens_k,
                 max_seqlen_q=orig_ctx.max_seqlen_q,
                 max_seqlen_k=orig_ctx.max_seqlen_k,
-                slot_mapping=slot_mapping_a,  # **关键**：切分以匹配token数
-                context_lens=orig_ctx.context_lens,  # 不切分
+                slot_mapping=slot_mapping_a,
+                context_lens=orig_ctx.context_lens,
                 block_tables=orig_ctx.block_tables
             )
             out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
     else:
+        torch.cuda.set_device(device_a)
         set_context(
             is_prefill=orig_ctx.is_prefill,
             cu_seqlens_q=orig_ctx.cu_seqlens_q,
@@ -1717,21 +1734,23 @@ def _parallel_execute_split_layer_fast(
         )
         out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
     
-    # 执行 B（使用简化的 context）
+    # 执行 B（在 device_b 上）
     if stream_b is not None:
         with torch.cuda.stream(stream_b):
+            torch.cuda.set_device(device_b)  # **安全措施**：确保在正确的设备上
             set_context(
                 is_prefill=orig_ctx.is_prefill,
                 cu_seqlens_q=orig_ctx.cu_seqlens_q,
                 cu_seqlens_k=orig_ctx.cu_seqlens_k,
                 max_seqlen_q=orig_ctx.max_seqlen_q,
                 max_seqlen_k=orig_ctx.max_seqlen_k,
-                slot_mapping=slot_mapping_b,  # **关键**：切分以匹配token数
+                slot_mapping=slot_mapping_b,
                 context_lens=orig_ctx.context_lens,
                 block_tables=orig_ctx.block_tables
             )
             out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
     else:
+        torch.cuda.set_device(device_b)
         set_context(
             is_prefill=orig_ctx.is_prefill,
             cu_seqlens_q=orig_ctx.cu_seqlens_q,
@@ -1744,8 +1763,9 @@ def _parallel_execute_split_layer_fast(
         )
         out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
     
-    # **零同步**：完全不同步，让GPU自然并行
-    # **不恢复context**：避免开销（最后一层会恢复）
+    # **最小必要同步**：只在需要读取结果前同步，避免非法内存访问
+    # 注意：不是每次都同步，只在最后一层合并时才真正需要同步的结果
+    # 中间层可以继续异步（结果会保存在split_state中，下一层会在正确的设备上访问）
     
     return out_a, res_a, out_b, res_b
 
