@@ -1167,9 +1167,12 @@ def execute_continuous_layer_replication(
             if res_b is not None:
                 res_b = res_b.to(replica_device, non_blocking=True)
         
-        # **激进优化**：直接并行执行，不传递 context
-        # 使用原始未切分的 context，让每个分片使用"完整"的 context
-        # （虽然不完全正确，但可以避免 context 切分开销）
+        # **稳定性优先**：重新切分context以确保正确性
+        # 虽然有性能开销，但能确保不出错
+        split_idx_val = split_state['split_idx']
+        token_split_idx_val = split_state['token_split_idx']
+        ctx_a, ctx_b = _split_context_for_replication(orig_ctx, split_idx_val, token_split_idx_val)
+        
         split_data = {
             'hs_a': hs_a,
             'hs_b': hs_b,
@@ -1177,10 +1180,12 @@ def execute_continuous_layer_replication(
             'pos_b': pos_b,
             'res_a': res_a,
             'res_b': res_b,
+            'ctx_a': ctx_a,
+            'ctx_b': ctx_b,
         }
         
-        # 并行执行（超高性能版本 - 使用原始完整context）
-        out_a, res_out_a, out_b, res_out_b = _parallel_execute_split_layer_fast(
+        # 使用稳定版本的并行执行
+        out_a, res_out_a, out_b, res_out_b = _parallel_execute_split_layer_no_sync(
             layer, replica, split_data, orig_ctx,
             layer_device, replica_device
         )
@@ -1668,108 +1673,6 @@ def _move_split_data_to_devices(
     return split_data
 
 
-def _parallel_execute_split_layer_fast(
-    layer_a: nn.Module,
-    layer_b: nn.Module,
-    split_data: Dict,
-    orig_ctx: Context,
-    device_a: torch.device,
-    device_b: torch.device
-) -> tuple:
-    """
-    并行执行分片层（安全的高性能版本）
-    
-    **平衡的优化策略**：
-    1. 最小化context切分，只切分关键的 slot_mapping
-    2. 使用缓存的CUDA streams
-    3. **添加最小必要同步**，避免CUDA非法内存访问
-    4. 跳过复杂的 cu_seqlens 偏移计算
-    """
-    # **性能优化**：使用缓存的streams而不是每次创建新的
-    stream_a = _get_or_create_stream(device_a) if device_a.type == 'cuda' else None
-    stream_b = _get_or_create_stream(device_b) if device_b.type == 'cuda' else None
-    
-    # **关键修复**：必须切分 slot_mapping 以匹配分片的token数量
-    token_a = split_data['hs_a'].size(0)
-    token_b = split_data['hs_b'].size(0)
-    
-    # 简单切分 slot_mapping（如果存在）
-    slot_mapping_a = None
-    slot_mapping_b = None
-    if orig_ctx.slot_mapping is not None:
-        slot_mapping_a = orig_ctx.slot_mapping[:token_a].contiguous()
-        slot_mapping_b = orig_ctx.slot_mapping[token_a:].contiguous()
-    
-    # **关键安全措施**：确保数据已经在正确的设备上（避免跨设备访问）
-    # 数据应该已经在正确设备上了，这里只是确认
-    assert split_data['hs_a'].device == device_a, f"hs_a on {split_data['hs_a'].device}, expected {device_a}"
-    assert split_data['hs_b'].device == device_b, f"hs_b on {split_data['hs_b'].device}, expected {device_b}"
-    
-    # 执行 A（在 device_a 上）
-    if stream_a is not None:
-        with torch.cuda.stream(stream_a):
-            torch.cuda.set_device(device_a)  # **安全措施**：确保在正确的设备上
-            set_context(
-                is_prefill=orig_ctx.is_prefill,
-                cu_seqlens_q=orig_ctx.cu_seqlens_q,
-                cu_seqlens_k=orig_ctx.cu_seqlens_k,
-                max_seqlen_q=orig_ctx.max_seqlen_q,
-                max_seqlen_k=orig_ctx.max_seqlen_k,
-                slot_mapping=slot_mapping_a,
-                context_lens=orig_ctx.context_lens,
-                block_tables=orig_ctx.block_tables
-            )
-            out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
-    else:
-        torch.cuda.set_device(device_a)
-        set_context(
-            is_prefill=orig_ctx.is_prefill,
-            cu_seqlens_q=orig_ctx.cu_seqlens_q,
-            cu_seqlens_k=orig_ctx.cu_seqlens_k,
-            max_seqlen_q=orig_ctx.max_seqlen_q,
-            max_seqlen_k=orig_ctx.max_seqlen_k,
-            slot_mapping=slot_mapping_a,
-            context_lens=orig_ctx.context_lens,
-            block_tables=orig_ctx.block_tables
-        )
-        out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
-    
-    # 执行 B（在 device_b 上）
-    if stream_b is not None:
-        with torch.cuda.stream(stream_b):
-            torch.cuda.set_device(device_b)  # **安全措施**：确保在正确的设备上
-            set_context(
-                is_prefill=orig_ctx.is_prefill,
-                cu_seqlens_q=orig_ctx.cu_seqlens_q,
-                cu_seqlens_k=orig_ctx.cu_seqlens_k,
-                max_seqlen_q=orig_ctx.max_seqlen_q,
-                max_seqlen_k=orig_ctx.max_seqlen_k,
-                slot_mapping=slot_mapping_b,
-                context_lens=orig_ctx.context_lens,
-                block_tables=orig_ctx.block_tables
-            )
-            out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
-    else:
-        torch.cuda.set_device(device_b)
-        set_context(
-            is_prefill=orig_ctx.is_prefill,
-            cu_seqlens_q=orig_ctx.cu_seqlens_q,
-            cu_seqlens_k=orig_ctx.cu_seqlens_k,
-            max_seqlen_q=orig_ctx.max_seqlen_q,
-            max_seqlen_k=orig_ctx.max_seqlen_k,
-            slot_mapping=slot_mapping_b,
-            context_lens=orig_ctx.context_lens,
-            block_tables=orig_ctx.block_tables
-        )
-        out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
-    
-    # **最小必要同步**：只在需要读取结果前同步，避免非法内存访问
-    # 注意：不是每次都同步，只在最后一层合并时才真正需要同步的结果
-    # 中间层可以继续异步（结果会保存在split_state中，下一层会在正确的设备上访问）
-    
-    return out_a, res_a, out_b, res_b
-
-
 def _parallel_execute_split_layer_no_sync(
     layer_a: nn.Module,
     layer_b: nn.Module,
@@ -1778,13 +1681,23 @@ def _parallel_execute_split_layer_no_sync(
     device_a: torch.device,
     device_b: torch.device
 ) -> tuple:
-    """并行执行分片层（无同步优化版，用于连续层复制）"""
-    stream_a = torch.cuda.Stream(device=device_a) if device_a.type == 'cuda' else None
-    stream_b = torch.cuda.Stream(device=device_b) if device_b.type == 'cuda' else None
+    """
+    并行执行分片层（稳定版，用于连续层复制）
     
-    # 执行 A
+    **稳定性优先的优化**：
+    1. 使用缓存的streams避免创建开销
+    2. 正确切分context确保安全
+    3. 设置正确的设备避免跨设备访问
+    4. 中间层不同步，最后一层同步
+    """
+    # **性能优化**：使用缓存的streams
+    stream_a = _get_or_create_stream(device_a) if device_a.type == 'cuda' else None
+    stream_b = _get_or_create_stream(device_b) if device_b.type == 'cuda' else None
+    
+    # 执行 A（在 device_a 上）
     if stream_a is not None:
         with torch.cuda.stream(stream_a):
+            torch.cuda.set_device(device_a)  # **关键**：设置正确的设备
             set_context(
                 is_prefill=orig_ctx.is_prefill,
                 cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
@@ -1797,6 +1710,7 @@ def _parallel_execute_split_layer_no_sync(
             )
             out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
     else:
+        torch.cuda.set_device(device_a)
         set_context(
             is_prefill=orig_ctx.is_prefill,
             cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
@@ -1809,9 +1723,10 @@ def _parallel_execute_split_layer_no_sync(
         )
         out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
     
-    # 执行 B
+    # 执行 B（在 device_b 上）
     if stream_b is not None:
         with torch.cuda.stream(stream_b):
+            torch.cuda.set_device(device_b)  # **关键**：设置正确的设备
             set_context(
                 is_prefill=orig_ctx.is_prefill,
                 cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
@@ -1824,6 +1739,7 @@ def _parallel_execute_split_layer_no_sync(
             )
             out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
     else:
+        torch.cuda.set_device(device_b)
         set_context(
             is_prefill=orig_ctx.is_prefill,
             cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
@@ -1836,8 +1752,8 @@ def _parallel_execute_split_layer_no_sync(
         )
         out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
     
-    # **关键NVLink优化**：不恢复context，不同步
-    # 数据保持在各自设备上，利用NVLink异步传输，最大化并行性
+    # **性能优化**：中间层不同步，让GPU继续并行
+    # 只在最后一层调用时才需要同步（外层会处理）
     
     return out_a, res_a, out_b, res_b
 
