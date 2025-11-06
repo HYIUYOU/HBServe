@@ -1,23 +1,25 @@
 `torch_dtype` is deprecated! Use `dtype` instead!
 ✓ 检测到模型类型: qwen3
-层 1 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
-层 1 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
-层 2 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
-层 2 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
-层 3 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
-层 3 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
-层 4 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
-层 4 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
-层 5 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
-层 5 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
-层 6 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
-层 6 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
-层 7 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
-层 7 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
-层 8 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
-层 8 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
-层 9 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
-层 9 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 10 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 10 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 11 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 11 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 12 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 12 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 13 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 13 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 14 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 14 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 15 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 15 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 16 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 16 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 17 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 17 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 18 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 18 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
+层 19 已复制：cuda:0(torch.bfloat16) -> cuda:1(torch.bfloat16)，切分比例: 0.50
+层 19 已启用自适应调优，beta=0.3, 范围=[0.2, 0.8]
 Generating:   0%|          | 0/10 [00:00<?, ?it/s][rank0]: Traceback (most recent call last):
 [rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/example_replication_autotune.py", line 78, in <module>
 [rank0]:     main()
@@ -45,12 +47,8 @@
 [rank0]:     return self._call_impl(*args, **kwargs)
 [rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
 [rank0]:     return forward_call(*args, **kwargs)
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/qwen3.py", line 281, in forward
-[rank0]:     hidden_states, residual = self._forward_with_continuous_replication(
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/qwen3.py", line 496, in _forward_with_continuous_replication
-[rank0]:     return execute_continuous_layer_replication(
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/utils/optimization_forward.py", line 946, in execute_continuous_layer_replication
-[rank0]:     return layer(positions, hidden_states, residual)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/qwen3.py", line 306, in forward
+[rank0]:     hidden_states, residual = layer(positions, hidden_states, residual)
 [rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
 [rank0]:     return self._call_impl(*args, **kwargs)
 [rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
@@ -61,106 +59,15 @@
 [rank0]:     return self._call_impl(*args, **kwargs)
 [rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
 [rank0]:     return forward_call(*args, **kwargs)
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/qwen3.py", line 99, in forward
-[rank0]:     q, k = self.rotary_emb(positions, q, k) # 根据position进行旋转位置编码，因为RoPE为绝对位置编码，因此可以这么做
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/models/qwen3.py", line 100, in forward
+[rank0]:     o = self.attn(q, k, v) # 将q，k，v（不包含prefix caching命中的部分）传入attention计算
 [rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
 [rank0]:     return self._call_impl(*args, **kwargs)
 [rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
 [rank0]:     return forward_call(*args, **kwargs)
-[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/layers/rotary_embedding.py", line 98, in forward
-[rank0]:     return impl(positions.to(target_device), query.to(target_device), key.to(target_device))
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-[rank0]:     return self._call_impl(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-[rank0]:     return forward_call(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 465, in _fn
-[rank0]:     return fn(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1269, in __call__
-[rank0]:     return self._torchdynamo_orig_callable(
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1064, in __call__
-[rank0]:     result = self._inner_convert(
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 526, in __call__
-[rank0]:     return _compile(
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 924, in _compile
-[rank0]:     guarded_code = compile_inner(code, one_graph, hooks, transform)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 666, in compile_inner
-[rank0]:     return _compile_inner(code, one_graph, hooks, transform)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_utils_internal.py", line 87, in wrapper_function
-[rank0]:     return function(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 699, in _compile_inner
-[rank0]:     out_code = transform_code_object(code, transform)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/bytecode_transformation.py", line 1322, in transform_code_object
-[rank0]:     transformations(instructions, code_options)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 219, in _fn
-[rank0]:     return fn(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 634, in transform
-[rank0]:     tracer.run()
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 2796, in run
-[rank0]:     super().run()
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 983, in run
-[rank0]:     while self.step():
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 895, in step
-[rank0]:     self.dispatch_table[inst.opcode](self, inst)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 582, in wrapper
-[rank0]:     return inner_fn(self, inst)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 1602, in CALL_FUNCTION
-[rank0]:     self.call_function(fn, args, {})
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 830, in call_function
-[rank0]:     self.push(fn.call_function(self, args, kwargs))  # type: ignore[arg-type]
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/variables/misc.py", line 1024, in call_function
-[rank0]:     return self.obj.call_method(tx, self.name, args, kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/variables/tensor.py", line 535, in call_method
-[rank0]:     return wrap_fx_proxy(
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/variables/builder.py", line 2037, in wrap_fx_proxy
-[rank0]:     return wrap_fx_proxy_cls(target_cls=TensorVariable, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/variables/builder.py", line 2124, in wrap_fx_proxy_cls
-[rank0]:     example_value = get_fake_value(proxy.node, tx, allow_non_graph_fake=True)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/utils.py", line 2082, in get_fake_value
-[rank0]:     raise TorchRuntimeError(str(e)).with_traceback(e.__traceback__) from None
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/utils.py", line 2017, in get_fake_value
-[rank0]:     ret_val = wrap_fake_exception(
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/utils.py", line 1574, in wrap_fake_exception
-[rank0]:     return fn()
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/utils.py", line 2018, in <lambda>
-[rank0]:     lambda: run_node(tx.output, node, args, kwargs, nnmodule)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/utils.py", line 2150, in run_node
-[rank0]:     raise RuntimeError(make_error_message(e)).with_traceback(
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_dynamo/utils.py", line 2134, in run_node
-[rank0]:     return getattr(args[0], node.target)(*args[1:], **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/utils/_device.py", line 106, in __torch_function__
-[rank0]:     return func(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/utils/_stats.py", line 21, in wrapper
-[rank0]:     return fn(*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_subclasses/fake_tensor.py", line 1238, in __torch_dispatch__
-[rank0]:     return self.dispatch(func, types, args, kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_subclasses/fake_tensor.py", line 1692, in dispatch
-[rank0]:     return self._cached_dispatch_impl(func, types, args, kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_subclasses/fake_tensor.py", line 1339, in _cached_dispatch_impl
-[rank0]:     output = self._dispatch_impl(func, types, args, kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_subclasses/fake_tensor.py", line 1943, in _dispatch_impl
-[rank0]:     return decomposition_table[func](*args, **kwargs)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_refs/__init__.py", line 4591, in view
-[rank0]:     return _reshape_view_helper(a, *shape, allow_copy=False)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_refs/__init__.py", line 3659, in _reshape_view_helper
-[rank0]:     shape = utils.infer_size(shape, a.numel())
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/_prims_common/__init__.py", line 917, in infer_size
-[rank0]:     torch._check(
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/__init__.py", line 1564, in _check
-[rank0]:     _check_with(RuntimeError, cond, message)
-[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/__init__.py", line 1546, in _check_with
-[rank0]:     raise error_type(message_evaluated)
-[rank0]: torch._dynamo.exc.TorchRuntimeError: Failed running call_method view(*(FakeTensor(..., device='cuda:0', size=(1, 8192), dtype=torch.bfloat16), s0, -1, 128), **{}):
-[rank0]: shape '[s0, -1, 128]' is invalid for input of size 8192
-
-[rank0]: from user code:
-[rank0]:    File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/layers/rotary_embedding.py", line 50, in forward
-[rank0]:     query = query.view(num_tokens, -1, self.head_size)
-
-[rank0]: Set TORCH_LOGS="+dynamo" and TORCHDYNAMO_VERBOSE=1 for more information
-
-
-[rank0]: You can suppress this exception and fall back to eager by setting:
-[rank0]:     import torch._dynamo
-[rank0]:     torch._dynamo.config.suppress_errors = True
-
-Generating:   0%|          | 0/10 [00:03<?, ?it/s]
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/layers/attention.py", line 138, in forward
+[rank0]:     store_kvcache(k, v, k_cache_dev, v_cache_dev, context.slot_mapping) # 将新计算得到的KV存储到KV Cache中
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/layers/attention.py", line 53, in store_kvcache
+[rank0]:     assert slot_mapping.numel() == N # slot_mapping是一个list，表示每个token应该存储在KV Cache 的哪个位置
+[rank0]: AssertionError
+Generating:   0%|          | 0/10 [00:05<?, ?it/s]

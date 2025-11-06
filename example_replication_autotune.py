@@ -10,9 +10,9 @@ os.environ['HB_REPLICA_LOG'] = '0'
 
 def main():
     # 与 example.py 保持一致的加载方式
-    path = os.path.expanduser("/home/admin/workspace/aop_lab/app_data/.cache/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218")
+    path = os.path.expanduser("/home/admin/workspace/aop_lab/app_data/.cache/models--Qwen--Qwen3-32B/snapshots/ba1f828c09458ab0ae83d42eaacc2cf8720c7957")
     tokenizer = AutoTokenizer.from_pretrained(path)
-    llm = LLM(path, enforce_eager=True, tensor_parallel_size=1,gpu_memory_utilization=0.6)
+    llm = LLM(path, enforce_eager=True, tensor_parallel_size=1,gpu_memory_utilization=0.9)
 
     # 配置第10层复制到GPU1，并开启自适应（需要>=2张GPU）
     try:
@@ -21,7 +21,7 @@ def main():
             if hasattr(llm, 'model_runner') and hasattr(llm.model_runner, 'model') and hasattr(llm.model_runner.model, 'model'):
                 model = llm.model_runner.model.model
                 # 第10层索引为 9
-                for i in range(1,10):
+                for i in range(10,20):
                     model.replicate_layer_to_device(i, 'cuda:1', split_ratio=0.5)
                     model.enable_replication_autotune(i, beta=0.3, min_ratio=0.2, max_ratio=0.8)
                 # model.replicate_layer_to_device(10, 'cuda:1', split_ratio=0.4)
@@ -54,7 +54,7 @@ def main():
         # "list all prime numbers within 100",
     ]
     jsonl_file = "/home/admin/workspace/aop_lab/app_source/data/longbench/2wikimqa_e.jsonl"
-    prompts = load_longbench_prompts(jsonl_file, max_samples=50)  
+    prompts = load_longbench_prompts(jsonl_file, max_samples=10)  
     prompts = [
         tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt}],
