@@ -67,30 +67,42 @@ class _NVLinkKVCacheSync:
 # 全局KV Cache管理器
 _global_kv_cache_sync = _NVLinkKVCacheSync()
 
+# **性能优化**：预分配CUDA streams，避免重复创建开销
+_global_streams = {}
+
+def _get_or_create_stream(device: torch.device) -> torch.cuda.Stream:
+    """获取或创建CUDA stream（缓存复用）"""
+    if device not in _global_streams:
+        _global_streams[device] = torch.cuda.Stream(device=device)
+    return _global_streams[device]
+
 
 # ============================================================================
 # NVLink优化：动态启用检查（更激进的阈值）
 # ============================================================================
 
-def _should_enable_nvlink_optimization(hidden_states, context, min_tokens=1024):
+def _should_enable_nvlink_optimization(hidden_states, context, min_tokens=256):
     """
-    NVLink下的优化启用策略
+    NVLink下的优化启用策略（激进版本）
     
-    由于NVLink传输开销极小（<0.5ms），可以在更小的batch上启用优化
+    **极致性能优化**：
+    - NVLink 带宽极高（~600GB/s），传输开销可忽略
+    - 激进启用优化，最大化GPU并行利用率
+    - 几乎总是启用，除非数据量极小
     """
     total_tokens = hidden_states.size(0)
     
     if context.is_prefill:
-        # Prefill: 1024+ tokens就启用（PCIe需要4096+）
+        # **激进优化**：256+ tokens就启用（远小于原来的1024）
         if total_tokens >= min_tokens:
-            return True, f"Prefill，tokens={total_tokens} (NVLink)"
+            return True, f"Prefill，tokens={total_tokens} (NVLink-Aggressive)"
         return False, f"tokens太少 ({total_tokens} < {min_tokens})"
     else:
-        # Decode: 8+ batch就启用（PCIe需要32+）
+        # **激进优化**：2+ batch就启用（远小于原来的8）
         batch_size = hidden_states.size(0)
-        min_batch = 8
+        min_batch = 2
         if batch_size >= min_batch:
-            return True, f"Decode，batch={batch_size} (NVLink)"
+            return True, f"Decode，batch={batch_size} (NVLink-Aggressive)"
         return False, f"batch太小 ({batch_size} < {min_batch})"
 
 
@@ -1079,6 +1091,12 @@ def execute_continuous_layer_replication(
         
         # **性能优化**：只在最后一层合并，中间层保持分片状态
         if is_last_in_group:
+            # **关键安全措施**：最后一层需要同步，确保数据传输完成
+            if layer_device.type == 'cuda':
+                torch.cuda.synchronize(layer_device)
+            if replica_device.type == 'cuda':
+                torch.cuda.synchronize(replica_device)
+            
             # **关键修复**：最后一层必须恢复原始 context
             # 因为后续的普通层需要正确的 context（如 slot_mapping）
             set_context(
@@ -1096,7 +1114,7 @@ def execute_continuous_layer_replication(
                 out_a, out_b, res_a, res_b, layer_device
             )
             if DEBUG:
-                print(f"[ReplicaGroup][layer {layer_id}] Last layer - merged outputs and restored context")
+                print(f"[ReplicaGroup][layer {layer_id}] Last layer - synced, merged outputs and restored context")
             return hidden_states, residual
         else:
             # 第一层/中间层：保存分片状态，不合并（避免跨设备传输）
@@ -1135,11 +1153,10 @@ def execute_continuous_layer_replication(
         pos_b = split_state['pos_b']
         res_a = split_state['res_a']
         res_b = split_state['res_b']
-        ctx_a = split_state['ctx_a']
-        ctx_b = split_state['ctx_b']
         orig_ctx = split_state['orig_ctx']
         
-        # 确保数据在正确的设备上
+        # **性能优化**：数据已经在正确的设备上，无需移动
+        # 只有在设备不匹配时才移动（这应该很少发生）
         if hs_a.device != layer_device:
             hs_a = hs_a.to(layer_device, non_blocking=True)
             if res_a is not None:
@@ -1150,7 +1167,12 @@ def execute_continuous_layer_replication(
             if res_b is not None:
                 res_b = res_b.to(replica_device, non_blocking=True)
         
-        # 构建 split_data
+        # **稳定性优先**：重新切分context以确保正确性
+        # 虽然有性能开销，但能确保不出错
+        split_idx_val = split_state['split_idx']
+        token_split_idx_val = split_state['token_split_idx']
+        ctx_a, ctx_b = _split_context_for_replication(orig_ctx, split_idx_val, token_split_idx_val)
+        
         split_data = {
             'hs_a': hs_a,
             'hs_b': hs_b,
@@ -1159,10 +1181,10 @@ def execute_continuous_layer_replication(
             'res_a': res_a,
             'res_b': res_b,
             'ctx_a': ctx_a,
-            'ctx_b': ctx_b
+            'ctx_b': ctx_b,
         }
         
-        # 并行执行（无同步版本）
+        # 使用稳定版本的并行执行
         out_a, res_out_a, out_b, res_out_b = _parallel_execute_split_layer_no_sync(
             layer, replica, split_data, orig_ctx,
             layer_device, replica_device
@@ -1170,6 +1192,12 @@ def execute_continuous_layer_replication(
         
         # **性能优化**：只在最后一层合并，中间层保持分片状态
         if is_last_in_group:
+            # **关键安全措施**：最后一层需要同步，确保数据传输完成
+            if layer_device.type == 'cuda':
+                torch.cuda.synchronize(layer_device)
+            if replica_device.type == 'cuda':
+                torch.cuda.synchronize(replica_device)
+            
             # **关键修复**：最后一层必须恢复原始 context
             # 因为后续的普通层需要正确的 context（如 slot_mapping）
             set_context(
@@ -1188,7 +1216,7 @@ def execute_continuous_layer_replication(
             )
             _clear_split_state_from_context(context)
             if DEBUG:
-                print(f"[ReplicaGroup][layer {layer_id}] Last layer - merged, restored context, and cleared split state")
+                print(f"[ReplicaGroup][layer {layer_id}] Last layer - synced, merged, restored context, and cleared split state")
             return hidden_states, residual
         else:
             # 中间层：更新分片状态，不合并（避免跨设备传输）
@@ -1202,8 +1230,8 @@ def execute_continuous_layer_replication(
                 res_b=res_out_b,
                 pos_a=pos_a,
                 pos_b=pos_b,
-                ctx_a=ctx_a,
-                ctx_b=ctx_b,
+                ctx_a=None,  # **激进优化**：不保存context，减少内存开销
+                ctx_b=None,
                 orig_ctx=orig_ctx,
                 device_a=layer_device,
                 device_b=replica_device
@@ -1459,22 +1487,14 @@ def _create_split_output_placeholder(
     target_device: torch.device
 ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
     """
-    创建占位符输出（用于中间层，数据保持分片状态）
+    创建占位符输出（极致性能优化版）
     
-    **NVLink优化**：返回轻量级占位符，避免跨设备数据传输和合并开销
-    真实数据保持在各自设备上（context._replica_split_state），利用NVLink异步传输
+    **性能优化**：直接返回 device_a 的数据，避免占位符创建开销
+    这样可以让后续层直接使用分片数据，实现真正的流水线并行
     """
-    # 创建一个小的占位符张量（而不是空张量，避免某些代码检查维度时出错）
-    # 使用1个token的占位符，确保下游代码能正常处理维度
-    placeholder_hs = torch.zeros((1, out_a.size(-1) if out_a.dim() > 1 else out_a.size(0)), 
-                                  dtype=out_a.dtype, device=target_device)
-    placeholder_res = None
-    if res_a is not None or res_b is not None:
-        res_ref = res_a if res_a is not None else res_b
-        placeholder_res = torch.zeros((1, res_ref.size(-1) if res_ref.dim() > 1 else res_ref.size(0)),
-                                      dtype=res_ref.dtype, device=target_device)
-    
-    return placeholder_hs, placeholder_res
+    # **激进优化**：直接返回 device_a 的数据作为"占位符"
+    # 这样后续层可以直接使用，避免创建新张量的开销
+    return out_a, res_a
 
 def _compute_split_indices(
     hidden_states: torch.Tensor,
@@ -1661,13 +1681,23 @@ def _parallel_execute_split_layer_no_sync(
     device_a: torch.device,
     device_b: torch.device
 ) -> tuple:
-    """并行执行分片层（无同步优化版，用于连续层复制）"""
-    stream_a = torch.cuda.Stream(device=device_a) if device_a.type == 'cuda' else None
-    stream_b = torch.cuda.Stream(device=device_b) if device_b.type == 'cuda' else None
+    """
+    并行执行分片层（稳定版，用于连续层复制）
     
-    # 执行 A
+    **稳定性优先的优化**：
+    1. 使用缓存的streams避免创建开销
+    2. 正确切分context确保安全
+    3. 设置正确的设备避免跨设备访问
+    4. 中间层不同步，最后一层同步
+    """
+    # **性能优化**：使用缓存的streams
+    stream_a = _get_or_create_stream(device_a) if device_a.type == 'cuda' else None
+    stream_b = _get_or_create_stream(device_b) if device_b.type == 'cuda' else None
+    
+    # 执行 A（在 device_a 上）
     if stream_a is not None:
         with torch.cuda.stream(stream_a):
+            torch.cuda.set_device(device_a)  # **关键**：设置正确的设备
             set_context(
                 is_prefill=orig_ctx.is_prefill,
                 cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
@@ -1680,6 +1710,7 @@ def _parallel_execute_split_layer_no_sync(
             )
             out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
     else:
+        torch.cuda.set_device(device_a)
         set_context(
             is_prefill=orig_ctx.is_prefill,
             cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
@@ -1692,9 +1723,10 @@ def _parallel_execute_split_layer_no_sync(
         )
         out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
     
-    # 执行 B
+    # 执行 B（在 device_b 上）
     if stream_b is not None:
         with torch.cuda.stream(stream_b):
+            torch.cuda.set_device(device_b)  # **关键**：设置正确的设备
             set_context(
                 is_prefill=orig_ctx.is_prefill,
                 cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
@@ -1707,6 +1739,7 @@ def _parallel_execute_split_layer_no_sync(
             )
             out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
     else:
+        torch.cuda.set_device(device_b)
         set_context(
             is_prefill=orig_ctx.is_prefill,
             cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
@@ -1719,8 +1752,8 @@ def _parallel_execute_split_layer_no_sync(
         )
         out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
     
-    # **关键NVLink优化**：不恢复context，不同步
-    # 数据保持在各自设备上，利用NVLink异步传输，最大化并行性
+    # **性能优化**：中间层不同步，让GPU继续并行
+    # 只在最后一层调用时才需要同步（外层会处理）
     
     return out_a, res_a, out_b, res_b
 
@@ -1859,7 +1892,12 @@ def _save_split_state_to_context(
     device_a: torch.device,
     device_b: torch.device
 ):
-    """保存分片状态到 context"""
+    """
+    保存分片状态到 context（极致性能优化版）
+    
+    **性能优化**：只保存最少必要的数据，减少内存和CPU开销
+    """
+    # **激进优化**：只保存张量和设备信息，移除不必要的 context 拷贝
     context._replica_split_state = {
         'split_idx': split_idx,
         'token_split_idx': token_split_idx,
@@ -1869,9 +1907,7 @@ def _save_split_state_to_context(
         'res_b': res_b,
         'pos_a': pos_a,
         'pos_b': pos_b,
-        'ctx_a': ctx_a,
-        'ctx_b': ctx_b,
-        'orig_ctx': orig_ctx,
+        'orig_ctx': orig_ctx,  # 只保留原始context用于最后恢复
         'device_a': device_a,
         'device_b': device_b
     }
