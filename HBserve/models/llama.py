@@ -392,7 +392,6 @@ class LlamaModel(ModelOptimizationMixin, nn.Module):
             self.replicas[layer_id],
             self.replica_devices[layer_id],
             self.replica_split_ratio[layer_id],
-            self.replica_autotune.get(layer_id),
             self.get_layer_device(layer_id),
             self._sync_kv_cache_for_decode
         )

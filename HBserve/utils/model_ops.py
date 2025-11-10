@@ -52,8 +52,6 @@ class LayerReplicationMixin:
         self.replicas: Dict[int, nn.Module] = {}
         self.replica_devices: Dict[int, torch.device] = {}
         self.replica_split_ratio: Dict[int, float] = {}
-        # 自动调参：按两侧耗时自适应比例
-        self.replica_autotune: Dict[int, dict] = {}
     
     def replicate_layer_to_device(
         self, 
@@ -107,13 +105,11 @@ class LayerReplicationMixin:
             self.replicas.clear()
             self.replica_devices.clear()
             self.replica_split_ratio.clear()
-            self.replica_autotune.clear()
             print("已清除所有层的复制配置")
         else:
             self.replicas.pop(layer_id, None)
             self.replica_devices.pop(layer_id, None)
             self.replica_split_ratio.pop(layer_id, None)
-            self.replica_autotune.pop(layer_id, None)
             print(f"已清除层 {layer_id} 的复制配置")
     
     def update_replication_split_ratio(self, layer_id: int, split_ratio: float) -> None:
@@ -125,32 +121,6 @@ class LayerReplicationMixin:
         self.replica_split_ratio[layer_id] = float(split_ratio)
         print(f"层 {layer_id} 切分比例已更新为: {split_ratio:.2f}")
     
-    def enable_replication_autotune(
-        self, 
-        layer_id: int, 
-        beta: float = 0.2, 
-        min_ratio: float = 0.1, 
-        max_ratio: float = 0.9
-    ) -> None:
-        """启用复制层的比例自适应"""
-        if layer_id not in self.replicas:
-            raise ValueError(f"层 {layer_id} 未配置复制，无法启用autotune")
-        if not (0.0 < beta <= 1.0):
-            raise ValueError("beta 需在 (0, 1] 区间内")
-        if not (0.0 < min_ratio < max_ratio < 1.0):
-            raise ValueError("min_ratio/max_ratio 需满足 0<min<max<1")
-        
-        self.replica_autotune[layer_id] = {
-            "beta": float(beta), 
-            "min": float(min_ratio), 
-            "max": float(max_ratio)
-        }
-        print(f"层 {layer_id} 已启用自适应调优，beta={beta}, 范围=[{min_ratio}, {max_ratio}]")
-    
-    def disable_replication_autotune(self, layer_id: int) -> None:
-        """禁用指定层的自适应调优"""
-        self.replica_autotune.pop(layer_id, None)
-        print(f"层 {layer_id} 已禁用自适应调优")
     
     def _sync_kv_cache_for_decode(
         self, 
@@ -196,8 +166,6 @@ class AttentionOffloadMixin:
         layer_id: int,
         offload_device: str | torch.device,
         split_ratio: float = 0.5,
-        enable_autotune: bool = False,
-        autotune_beta: float = 0.3,
         attention_class: type = None
     ) -> None:
         """将指定层的 Attention 模块 offload 到另一个 GPU，按 batch 切分并行计算"""
@@ -241,24 +209,18 @@ class AttentionOffloadMixin:
             'offload_device': offload_device,
             'src_device': src_device,
             'split_ratio': float(split_ratio),
-            'enable_autotune': enable_autotune,
-            'autotune_beta': autotune_beta,
-            'autotune_stats': {'min_ratio': 0.1, 'max_ratio': 0.9}
         }
         
         print(f"Attention Offload: 层 {layer_id} Attention 已 offload：")
         print(f"  原设备: {src_device} ({src_dtype})")
         print(f"  目标设备: {offload_device} ({src_dtype})")
         print(f"  切分比例: {split_ratio:.2f}")
-        print(f"  自适应调优: {'启用' if enable_autotune else '禁用'}")
     
     def attention_offload_by_kv_head(
         self,
         layer_id: int,
         offload_device: str | torch.device,
         split_kv_head_idx: Optional[int] = None,
-        enable_autotune: bool = False,
-        autotune_beta: float = 0.3
     ) -> None:
         """按 KV Head 切分 Attention 到两个 GPU"""
         if layer_id < 0 or layer_id >= len(self.layers):
@@ -354,8 +316,6 @@ class AttentionOffloadMixin:
             'v_cache_0': None,
             'k_cache_1': None,
             'v_cache_1': None,
-            'enable_autotune': enable_autotune,
-            'autotune_beta': autotune_beta if enable_autotune else None,
         }
         
         print(f"KV Head Split: 层 {layer_id} Attention 已按 KV Head 切分：")

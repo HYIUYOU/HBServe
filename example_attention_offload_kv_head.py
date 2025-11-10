@@ -17,7 +17,6 @@ def main():
             layer_id=i,
             offload_device='cuda:1',
             split_kv_head_idx=None,  # None = 均分
-            enable_autotune=False
         )
     print("✓ KV Head Split 已启用\n")
     
