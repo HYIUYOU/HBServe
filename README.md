@@ -277,9 +277,6 @@ model = llm.model_runner.model.model
 # 基础用法
 model.replicate_layer_to_device(9, 'cuda:1', split_ratio=0.5)
 
-# 启用自适应调优（推荐）
-model.enable_replication_autotune(9, beta=0.3, min_ratio=0.2, max_ratio=0.8)
-
 # 查看调优日志
 # export HB_REPLICA_LOG=1
 ```

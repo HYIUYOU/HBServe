@@ -16,7 +16,6 @@ def main():
         layer_id=9,
         offload_device='cuda:1',
         split_ratio=0.5,
-        enable_autotune=False  # 先禁用 autotune
     )
     print("✓attention batch offload 已启用\n")
     

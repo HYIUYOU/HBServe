@@ -1,4 +1,4 @@
-# HB_REPLICA_LOG = 1 python example_replication_autotune.py
+# HB_REPLICA_LOG = 1 python example_replication.py
 import os
 from HBserve import LLM, SamplingParams
 from transformers import AutoTokenizer

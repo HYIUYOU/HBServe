@@ -8,7 +8,7 @@ import os
 from torch import nn
 from typing import Dict, Optional, Callable
 from HBserve.utils.context import get_context, set_context, Context
-
+import torch.cuda.nvtx as nvtx
 
 
 
@@ -570,45 +570,9 @@ def execute_attention_offload_forward(
     
     output = torch.cat([out_a, out_b], dim=0)
     
-    # 自适应调优
-    if config['enable_autotune'] and start_a and end_a and start_b and end_b:
-        _update_attention_offload_ratio(
-            layer_id, config, ratio,
-            start_a, end_a, start_b, end_b,
-            src_device, offload_device
-        )
     
     return output
 
-
-def _update_attention_offload_ratio(
-    layer_id: int,
-    config: Dict,
-    old_ratio: float,
-    start_a, end_a, start_b, end_b,
-    src_device, offload_device
-) -> None:
-    """更新 Attention offload 的切分比例"""
-    time_a = start_a.elapsed_time(end_a) if src_device.type == 'cuda' else 0.0
-    time_b = start_b.elapsed_time(end_b) if offload_device.type == 'cuda' else 0.0
-    total = time_a + time_b
-    
-    if total > 0:
-        target_ratio = time_b / total
-        beta = config['autotune_beta']
-        new_ratio = (1.0 - beta) * old_ratio + beta * target_ratio
-        
-        stats = config['autotune_stats']
-        new_ratio = max(stats['min_ratio'], min(new_ratio, stats['max_ratio']))
-        
-        config['split_ratio'] = new_ratio
-        
-        if os.environ.get("HB_ATTN_OFFLOAD_LOG", "0") != "0":
-            print(
-                f"[AttnOffload][layer {layer_id}] "
-                f"time_a={time_a:.3f}ms time_b={time_b:.3f}ms "
-                f"ratio: {old_ratio:.3f} -> {new_ratio:.3f} (target={target_ratio:.3f})"
-            )
 
 
 def execute_layer_replication_forward(
@@ -621,7 +585,6 @@ def execute_layer_replication_forward(
     replica: nn.Module,
     replica_device: torch.device,
     split_ratio: float,
-    autotune_config: Optional[Dict],
     layer_device: torch.device,
     sync_kv_cache_fn: Callable
 ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
@@ -638,7 +601,6 @@ def execute_layer_replication_forward(
         replica: 复制的层
         replica_device: 复制层的设备
         split_ratio: 切分比例
-        autotune_config: 自适应调优配置
         layer_device: 原始层设备
         sync_kv_cache_fn: 同步 KV cache 的函数
     
@@ -899,22 +861,6 @@ def execute_layer_replication_forward(
     else:
         residual = torch.cat([res_out_a, res_out_b], dim=0)
     
-    # Autotune
-    if autotune_config and start_a and end_a and start_b and end_b:
-        time_a = start_a.elapsed_time(end_a) if layer_device.type == 'cuda' else 0.0
-        time_b = start_b.elapsed_time(end_b) if replica_device.type == 'cuda' else 0.0
-        total = time_a + time_b
-        if total > 0:
-            target_ratio = time_b / total
-            beta = autotune_config["beta"]
-            new_ratio = (1.0 - beta) * split_ratio + beta * target_ratio
-            new_ratio = max(autotune_config["min"], min(new_ratio, autotune_config["max"]))
-            
-            if os.environ.get("HB_REPLICA_LOG", "0") != "0":
-                print(
-                    f"[Replica][layer {layer_id}] time_a={time_a:.3f}ms time_b={time_b:.3f}ms "
-                    f"ratio(old)={split_ratio:.3f} -> ratio(new)={new_ratio:.3f}"
-                )
     
     return hidden_states, residual
 
@@ -929,7 +875,6 @@ def execute_continuous_layer_replication(
     replica: nn.Module,
     replica_device: torch.device,
     split_ratio: float,
-    autotune_config: Optional[Dict],
     layer_device: torch.device,
     sync_kv_cache_fn: Callable,
     is_first_in_group: bool,
