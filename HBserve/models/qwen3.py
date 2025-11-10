@@ -399,7 +399,6 @@ class Qwen3Model(ModelOptimizationMixin, nn.Module):
             self.replicas[layer_id],
             self.replica_devices[layer_id],
             self.replica_split_ratio[layer_id],
-            self.replica_autotune.get(layer_id),
             self.get_layer_device(layer_id),
             self._sync_kv_cache_for_decode
         )
@@ -490,7 +489,6 @@ class Qwen3Model(ModelOptimizationMixin, nn.Module):
         replica = self.replicas[layer_id]
         replica_device = self.replica_devices[layer_id]
         split_ratio = self.replica_split_ratio[layer_id]
-        autotune_config = self.replica_autotune.get(layer_id)
         layer_device = self.get_layer_device(layer_id)
         
         return execute_continuous_layer_replication(
@@ -503,7 +501,6 @@ class Qwen3Model(ModelOptimizationMixin, nn.Module):
             replica=replica,
             replica_device=replica_device,
             split_ratio=split_ratio,
-            autotune_config=autotune_config,
             layer_device=layer_device,
             sync_kv_cache_fn=self._sync_kv_cache_for_decode,
             is_first_in_group=group_info['is_first'],
@@ -546,118 +543,3 @@ class Qwen3ForCausalLM(nn.Module):
             self.lm_head = self.lm_head.to(hidden_device)
         logits = self.lm_head(hidden_states)
         return logits
-
-
-# # ========== 便捷函数：用于模型优化配置 ==========
-
-# def configure_model_optimization(
-#     model: Qwen3ForCausalLM,
-#     device_map: Optional[dict] = None,
-#     replication_config: Optional[dict] = None,
-#     attention_offload_config: Optional[dict] = None
-# ) -> None:
-#     """
-#     便捷函数：配置模型优化
-    
-#     Args:
-#         model: Qwen3ForCausalLM 模型
-#         device_map: 层到设备的映射，例如 {0: 'cuda:0', 1: 'cuda:1'}
-#         replication_config: 层复制配置，例如 {5: {'device': 'cuda:1', 'ratio': 0.6}}
-#         attention_offload_config: Attention offload 配置
-    
-#     Example:
-#         >>> model = Qwen3ForCausalLM(config)
-#         >>> configure_model_optimization(
-#         ...     model,
-#         ...     device_map={0: 'cuda:0', 1: 'cuda:0', 2: 'cuda:1'},
-#         ...     replication_config={5: {'device': 'cuda:2', 'ratio': 0.6}},
-#         ...     attention_offload_config={10: {'device': 'cuda:3', 'type': 'kv_head'}}
-#         ... )
-#     """
-#     qwen_model = model.model
-    
-#     # 1. 配置设备分布
-#     if device_map:
-#         qwen_model.set_layer_device_distribution(device_map)
-    
-#     # 2. 配置层复制
-#     if replication_config:
-#         for layer_id, cfg in replication_config.items():
-#             qwen_model.replicate_layer_to_device(
-#                 layer_id=layer_id,
-#                 device=cfg['device'],
-#                 split_ratio=cfg.get('ratio', 0.5)
-#             )
-#             if cfg.get('autotune', False):
-#                 qwen_model.enable_replication_autotune(
-#                     layer_id=layer_id,
-#                     beta=cfg.get('beta', 0.2),
-#                     min_ratio=cfg.get('min_ratio', 0.1),
-#                     max_ratio=cfg.get('max_ratio', 0.9)
-#                 )
-    
-#     # 3. 配置 Attention offload
-#     if attention_offload_config:
-#         for layer_id, cfg in attention_offload_config.items():
-#             offload_type = cfg.get('type', 'batch')
-#             if offload_type == 'kv_head':
-#                 qwen_model.attention_offload_by_kv_head(
-#                     layer_id=layer_id,
-#                     offload_device=cfg['device'],
-#                     split_kv_head_idx=cfg.get('split_idx'),
-#                     enable_autotune=cfg.get('autotune', False),
-#                     autotune_beta=cfg.get('beta', 0.3)
-#                 )
-#             else:  # batch
-#                 qwen_model.attention_offload_by_batch(
-#                     layer_id=layer_id,
-#                     offload_device=cfg['device'],
-#                     split_ratio=cfg.get('ratio', 0.5),
-#                     enable_autotune=cfg.get('autotune', False),
-#                     autotune_beta=cfg.get('beta', 0.3)
-#                 )
-
-
-# # ========== 使用示例 ==========
-
-# if __name__ == "__main__":
-#     # 创建模型
-#     config = Qwen3Config()
-#     model = Qwen3ForCausalLM(config)
-    
-#     # 方式 1: 直接使用 API
-#     model.model.move_layer_to_device(0, 'cuda:0')
-#     model.model.replicate_layer_to_device(5, 'cuda:1', split_ratio=0.6)
-#     model.model.attention_offload_by_kv_head(10, 'cuda:2')
-    
-#     # 方式 2: 使用配置函数
-#     configure_model_optimization(
-#         model,
-#         device_map={
-#             0: 'cuda:0',
-#             1: 'cuda:0',
-#             2: 'cuda:1',
-#             3: 'cuda:1',
-#         },
-#         replication_config={
-#             5: {
-#                 'device': 'cuda:2',
-#                 'ratio': 0.6,
-#                 'autotune': True,
-#                 'beta': 0.2
-#             }
-#         },
-#         attention_offload_config={
-#             10: {
-#                 'device': 'cuda:3',
-#                 'type': 'kv_head',
-#                 'split_idx': 4,
-#                 'autotune': True
-#             }
-#         }
-#     )
-    
-#     print("Qwen3 模型配置完成！")
-#     print(f"层数: {len(model.model.layers)}")
-#     print(f"复制的层: {list(model.model.replicas.keys())}")
-#     print(f"Attention offload 的层: {list(model.model.attention_offload.keys())}")

@@ -1,4 +1,4 @@
-# HB_REPLICA_LOG = 1 python example_replication_autotune.py
+# HB_REPLICA_LOG = 1 python example_replication.py
 import os
 from HBserve import LLM, SamplingParams
 from transformers import AutoTokenizer
@@ -23,11 +23,7 @@ def main():
                 # 第10层索引为 9
                 for i in range(10,20):
                     model.replicate_layer_to_device(i, 'cuda:1', split_ratio=0.5)
-                    model.enable_replication_autotune(i, beta=0.3, min_ratio=0.2, max_ratio=0.8)
-                # model.replicate_layer_to_device(10, 'cuda:1', split_ratio=0.4)
-                # model.replicate_layer_to_device(11, 'cuda:1', split_ratio=0.4)
-                # model.replicate_layer_to_device(12, 'cuda:1', split_ratio=0.4)
-                # model.enable_replication_autotune(9, beta=0.3, min_ratio=0.2, max_ratio=0.8)
+                   
                 
         else:
             print("警告: 需要至少2张GPU来演示复制并行，自适应功能将跳过。")
