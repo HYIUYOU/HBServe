@@ -7,7 +7,7 @@ import torch
 import os
 from torch import nn
 from typing import Dict, Optional, Callable
-from HBserve.utils.context import get_context, set_context, Context
+from HBserve.utils.context import get_context, set_context, reset_context, Context
 import torch.cuda.nvtx as nvtx
 
 
