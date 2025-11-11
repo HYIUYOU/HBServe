@@ -19,12 +19,6 @@ from HBserve.layers.embed_head import VocabParallelEmbedding, ParallelLMHead
 from HBserve.utils.context import get_context, set_context, Context
 
 # 导入优化 Mixin 和执行逻辑
-from HBserve.utils.model_ops import ModelOptimizationMixin
-from HBserve.utils.optimization_forward import (
-    execute_kv_head_split_forward,
-    execute_attention_offload_forward,
-    execute_layer_replication_forward
-)
 
 from HBserve.models import register_model  # ← 导入装饰器
 
@@ -174,338 +168,30 @@ class Qwen3DecoderLayer(nn.Module):
         return hidden_states, residual
 
 
-class Qwen3Model(ModelOptimizationMixin, nn.Module):
-    """
-    Qwen3 模型 - 使用 Mixin 模式重构
-    
-    继承 ModelOptimizationMixin 后，自动获得以下优化功能：
-    1. 层设备管理（move_layer_to_device, get_layer_device 等）
-    2. 层复制（replicate_layer_to_device, clear_layer_replication 等）
-    3. Attention Offload（attention_offload_by_batch, attention_offload_by_kv_head 等）
-    """
+class Qwen3Model(nn.Module):
 
     def __init__(
         self,
         config: Qwen3Config,
     ) -> None:
-        # 先初始化 nn.Module
-        nn.Module.__init__(self)
-        # 再初始化 Mixin（这会初始化所有优化相关的字典）
-        ModelOptimizationMixin.__init__(self)
-        
-        self.config = config
+        super().__init__()
         self.embed_tokens = VocabParallelEmbedding(config.vocab_size, config.hidden_size)
-        self.layers = nn.ModuleList([
-            Qwen3DecoderLayer(config) 
-            for _ in range(config.num_hidden_layers)
-        ])
+        self.layers = nn.ModuleList([Qwen3DecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-
-    # ========== 实现 Mixin 需要的抽象方法 ==========
-    
-    def _create_decoder_layer(self):
-        """创建一个新的 decoder layer 实例（LayerReplicationMixin 需要）"""
-        return Qwen3DecoderLayer(self.config)
-    
-    def _create_attention_module(self):
-        """创建一个新的 attention 模块实例（AttentionOffloadMixin 需要）"""
-        return Qwen3Attention(
-            hidden_size=self.config.hidden_size,
-            num_heads=self.config.num_attention_heads,
-            num_kv_heads=self.config.num_key_value_heads,
-            max_position=self.config.max_position_embeddings,
-            rms_norm_eps=self.config.rms_norm_eps,
-            qkv_bias=getattr(self.config, 'attention_bias', False),
-            head_dim=getattr(self.config, 'head_dim', None),
-            rope_theta=getattr(self.config, "rope_theta", 1000000),
-            rope_scaling=getattr(self.config, "rope_scaling", None),
-        )
-
-    # ========== 前向传播 ==========
 
     def forward(
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
     ) -> torch.Tensor:
-        # 1. 获取第一层的设备
-        first_layer_device = self.get_layer_device(0)
-        
-        # 2. 确保 embed_tokens 在第一层设备
-        if self.embed_tokens.weight.device != first_layer_device:
-            self.embed_tokens = self.embed_tokens.to(first_layer_device)
-        
-        # 3. 确保输入在第一层设备
-        if input_ids.device != first_layer_device:
-            input_ids = input_ids.to(first_layer_device)
-        if positions.device != first_layer_device:
-            positions = positions.to(first_layer_device)
         hidden_states = self.embed_tokens(input_ids)
         residual = None
-        
-        # 获取 context
-        context = get_context()
-        is_prefill = context.is_prefill
-
-        # ===== 新增：检测连续的复制层序列 =====
-        replica_groups = self._get_replica_layer_groups()
-
-        for layer_id, layer in enumerate(self.layers):
-            # 检查当前层是否在某个连续复制组中
-            in_replica_group = False
-            group_info = None
-            
-            for group in replica_groups:
-                if layer_id in group['layer_ids']:
-                    in_replica_group = True
-                    group_info = {
-                        'is_first': layer_id == group['layer_ids'][0],
-                        'is_last': layer_id == group['layer_ids'][-1],
-                        'device': group['device']
-                    }
-                    break
-            # ===== 1. 设备管理 =====
-            layer_device = self.get_layer_device(layer_id)
-            current_device = hidden_states.device
-            
-            if layer_device != current_device:
-                hidden_states = hidden_states.to(layer_device)
-                positions = positions.to(layer_device)
-                if residual is not None:
-                    residual = residual.to(layer_device)
-            
-            # ===== 2. 检查并应用优化策略 =====
-            
-            # 层复制：连续复制层需要特殊处理
-            if in_replica_group:
-                hidden_states, residual = self._forward_with_continuous_replication(
-                    layer_id, layer, positions, hidden_states, residual, context,
-                    group_info
-                )
-            # 优先级 1: KV Head Split（最细粒度的优化）
-            elif layer_id in self.attention_offload and \
-               self.attention_offload[layer_id].get('type') == 'kv_head_split':
-                hidden_states, residual = self._forward_with_kv_head_split(
-                    layer_id, layer, positions, hidden_states, residual, context
-                )
-            
-            # 优先级 2: Attention Offload by Batch
-            elif layer_id in self.attention_offload:
-                hidden_states, residual = self._forward_with_attention_offload(
-                    layer_id, layer, positions, hidden_states, residual, context
-                )
-            
-            # # 优先级 3: Layer Replication
-            # elif layer_id in self.replicas:
-            #     hidden_states, residual = self._forward_with_layer_replication(
-            #         layer_id, layer, positions, hidden_states, residual, context
-            #     )
-            
-            # 默认: 正常前向传播
-            else:
-                hidden_states, residual = layer(positions, hidden_states, residual)
-        
-        # 4. 获取最后一层的设备
-        last_layer_device = self.get_layer_device(len(self.layers) - 1)
-        
-        # 5. 确保 norm 在最后一层设备
-        if self.norm.weight.device != last_layer_device:
-            self.norm = self.norm.to(last_layer_device)
-        
-        # 6. 确保输出在最后一层设备
-        if hidden_states.device != last_layer_device:
-            hidden_states = hidden_states.to(last_layer_device)
-        if residual is not None and residual.device != last_layer_device:
-            residual = residual.to(last_layer_device)
-        # 最后的 norm
+        for layer in self.layers:
+            hidden_states, residual = layer(positions, hidden_states, residual)
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
-
-    # ========== 各种优化策略的执行逻辑 ==========
-
-    def _forward_with_kv_head_split(
-        self,
-        layer_id: int,
-        layer: nn.Module,
-        positions: torch.Tensor,
-        hidden_states: torch.Tensor,
-        residual: Optional[torch.Tensor],
-        context: Context
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """使用 KV Head Split 的前向传播"""
-        # Pre-attention norm
-        if residual is None:
-            residual = hidden_states
-            hidden_states = layer.input_layernorm(hidden_states)
-        else:
-            hidden_states, residual = layer.input_layernorm(hidden_states, residual)
         
-        # 执行分片的 attention（调用外部实现）
-        hidden_states = execute_kv_head_split_forward(
-            layer_id, layer, positions, hidden_states, context,
-            self.attention_offload[layer_id]
-        )
-        
-        # Post-attention norm 和 MLP
-        hidden_states, residual = layer.post_attention_layernorm(hidden_states, residual)
-        hidden_states = layer.mlp(hidden_states)
-        
-        return hidden_states, residual
-
-    def _forward_with_attention_offload(
-        self,
-        layer_id: int,
-        layer: nn.Module,
-        positions: torch.Tensor,
-        hidden_states: torch.Tensor,
-        residual: Optional[torch.Tensor],
-        context: Context
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """使用 Attention Offload 的前向传播"""
-        # Pre-attention norm
-        if residual is None:
-            residual = hidden_states
-            hidden_states = layer.input_layernorm(hidden_states)
-        else:
-            hidden_states, residual = layer.input_layernorm(hidden_states, residual)
-        
-        # 执行 offload 的 attention（调用外部实现）
-        hidden_states = execute_attention_offload_forward(
-            layer_id, layer, positions, hidden_states, context,
-            self.attention_offload[layer_id],
-            self._split_context_for_attention,
-            self._sync_attention_kv_cache
-        )
-        
-        # Post-attention norm 和 MLP
-        hidden_states, residual = layer.post_attention_layernorm(hidden_states, residual)
-        hidden_states = layer.mlp(hidden_states)
-        
-        return hidden_states, residual
-
-    def _forward_with_layer_replication(
-        self,
-        layer_id: int,
-        layer: nn.Module,
-        positions: torch.Tensor,
-        hidden_states: torch.Tensor,
-        residual: Optional[torch.Tensor],
-        context: Context
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """使用层复制的前向传播"""
-        # 调用外部实现（包含完整的层执行，含 norm 和 MLP）
-        return execute_layer_replication_forward(
-            layer_id, layer, positions, hidden_states, residual, context,
-            self.replicas[layer_id],
-            self.replica_devices[layer_id],
-            self.replica_split_ratio[layer_id],
-            self.get_layer_device(layer_id),
-            self._sync_kv_cache_for_decode
-        )
-    def _get_replica_layer_groups(self) -> list:
-        """
-        检测连续的复制层组
-        
-        Returns:
-            List of groups, each group is:
-            {
-                'layer_ids': [1, 2, 3, ...],  # 连续的层ID
-                'device': torch.device,         # 复制到的设备
-                'split_ratio': float            # 平均切分比例
-            }
-        """
-        if not self.replicas:
-            return []
-        
-        groups = []
-        current_group = None
-        
-        sorted_layer_ids = sorted(self.replicas.keys())
-        
-        for layer_id in sorted_layer_ids:
-            replica_device = self.replica_devices[layer_id]
-            
-            if current_group is None:
-                # 开始新组
-                current_group = {
-                    'layer_ids': [layer_id],
-                    'device': replica_device,
-                    'split_ratios': [self.replica_split_ratio[layer_id]]
-                }
-            else:
-                # 检查是否连续且设备相同
-                if (layer_id == current_group['layer_ids'][-1] + 1 and
-                    replica_device == current_group['device']):
-                    # 加入当前组
-                    current_group['layer_ids'].append(layer_id)
-                    current_group['split_ratios'].append(self.replica_split_ratio[layer_id])
-                else:
-                    # 保存当前组，开始新组
-                    groups.append(current_group)
-                    current_group = {
-                        'layer_ids': [layer_id],
-                        'device': replica_device,
-                        'split_ratios': [self.replica_split_ratio[layer_id]]
-                    }
-        
-        # 保存最后一组
-        if current_group is not None:
-            groups.append(current_group)
-        
-        return groups
-
-
-    def _forward_with_continuous_replication(
-        self,
-        layer_id: int,
-        layer: nn.Module,
-        positions: torch.Tensor,
-        hidden_states: torch.Tensor,
-        residual: Optional[torch.Tensor],
-        context: Context,
-        group_info: dict
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        处理连续复制层组中的单层
-        
-        Args:
-            layer_id: 当前层ID
-            layer: 当前层模块
-            positions: 位置张量
-            hidden_states: 隐藏状态
-            residual: 残差
-            context: 上下文
-            group_info: {
-                'is_first': bool,     # 是否是组内第一层
-                'is_last': bool,      # 是否是组内最后一层
-                'device': torch.device  # 复制设备
-            }
-        
-        Returns:
-            (hidden_states, residual)
-        """
-        from HBserve.utils.optimization_forward import execute_continuous_layer_replication
-        
-        replica = self.replicas[layer_id]
-        replica_device = self.replica_devices[layer_id]
-        split_ratio = self.replica_split_ratio[layer_id]
-        layer_device = self.get_layer_device(layer_id)
-        
-        return execute_continuous_layer_replication(
-            layer_id=layer_id,
-            layer=layer,
-            positions=positions,
-            hidden_states=hidden_states,
-            residual=residual,
-            context=context,
-            replica=replica,
-            replica_device=replica_device,
-            split_ratio=split_ratio,
-            layer_device=layer_device,
-            sync_kv_cache_fn=self._sync_kv_cache_for_decode,
-            is_first_in_group=group_info['is_first'],
-            is_last_in_group=group_info['is_last']
-        )
+    
 @register_model("qwen3") 
 class Qwen3ForCausalLM(nn.Module):
     packed_modules_mapping = {
