@@ -81,7 +81,14 @@ def _get_or_create_stream(device: torch.device) -> torch.cuda.Stream:
 # NVLink优化：动态启用检查（更激进的阈值）
 # ============================================================================
 
-def _should_enable_nvlink_optimization(hidden_states, context, min_tokens=256):
+def _should_enable_nvlink_optimization(
+    hidden_states,
+    context,
+    min_tokens=256,
+    *,
+    total_tokens_override: int | None = None,
+    batch_size_override: int | None = None,
+):
     """
     NVLink下的优化启用策略（激进版本）
     
@@ -90,7 +97,7 @@ def _should_enable_nvlink_optimization(hidden_states, context, min_tokens=256):
     - 激进启用优化，最大化GPU并行利用率
     - 几乎总是启用，除非数据量极小
     """
-    total_tokens = hidden_states.size(0)
+    total_tokens = total_tokens_override if total_tokens_override is not None else hidden_states.size(0)
     
     if context.is_prefill:
         # **激进优化**：256+ tokens就启用（远小于原来的1024）
@@ -99,7 +106,7 @@ def _should_enable_nvlink_optimization(hidden_states, context, min_tokens=256):
         return False, f"tokens太少 ({total_tokens} < {min_tokens})"
     else:
         # **激进优化**：2+ batch就启用（远小于原来的8）
-        batch_size = hidden_states.size(0)
+        batch_size = batch_size_override if batch_size_override is not None else hidden_states.size(0)
         min_batch = 2
         if batch_size >= min_batch:
             return True, f"Decode，batch={batch_size} (NVLink-Aggressive)"
@@ -1129,8 +1136,8 @@ def execute_continuous_layer_replication(
             'pos_b': pos_b,
             'res_a': res_a,
             'res_b': res_b,
-            'ctx_a': ctx_a,
-            'ctx_b': ctx_b,
+            'ctx_a': _context_to_device(ctx_a, layer_device),
+            'ctx_b': _context_to_device(ctx_b, replica_device),
         }
         
         # 使用稳定版本的并行执行
@@ -1314,6 +1321,18 @@ def _split_context_for_replication(
     return ctx_a, ctx_b
 
 
+def _context_to_device(ctx: Optional[Dict], device: torch.device) -> Optional[Dict]:
+    if ctx is None:
+        return None
+    moved: Dict[str, Optional[torch.Tensor]] = {}
+    for key, value in ctx.items():
+        if value is None:
+            moved[key] = None
+        else:
+            moved[key] = value if value.device == device else value.to(device, non_blocking=True)
+    return moved
+
+
 def _move_split_data_to_devices(
     split_data: Dict,
     device_a: torch.device,
@@ -1324,11 +1343,13 @@ def _move_split_data_to_devices(
     split_data['pos_a'] = split_data['pos_a'].to(device_a, non_blocking=True)
     if split_data['res_a'] is not None:
         split_data['res_a'] = split_data['res_a'].to(device_a, non_blocking=True)
+    split_data['ctx_a'] = _context_to_device(split_data['ctx_a'], device_a)
     
     split_data['hs_b'] = split_data['hs_b'].to(device_b, non_blocking=True)
     split_data['pos_b'] = split_data['pos_b'].to(device_b, non_blocking=True)
     if split_data['res_b'] is not None:
         split_data['res_b'] = split_data['res_b'].to(device_b, non_blocking=True)
+    split_data['ctx_b'] = _context_to_device(split_data['ctx_b'], device_b)
     
     return split_data
 
