@@ -5,7 +5,7 @@ from transformers import AutoTokenizer
 import torch
 from HBserve.utils.loader import load_longbench_prompts
 os.environ['HB_ATTN_OFFLOAD_LOG'] = '0'
-os.environ['HB_DEBUG'] = '1'  # 不启用 attention 调试日志
+os.environ['HB_DEBUG'] = '0'  # 不启用 attention 调试日志
 os.environ['HB_REPLICA_LOG'] = '1'
 os.environ['HB_FLASH_LOG'] = '1'
 
