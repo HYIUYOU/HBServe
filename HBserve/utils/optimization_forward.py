@@ -11,6 +11,9 @@ from HBserve.utils.context import get_context, set_context, reset_context, Conte
 import torch.cuda.nvtx as nvtx
 
 
+_DECODE_MIN_REPLICA_BATCH = int(os.environ.get("HB_REPLICA_DECODE_MIN_BATCH", "4"))
+
+
 
 # ============================================================================
 # NVLink优化：增量KV Cache同步
@@ -918,11 +921,21 @@ def execute_continuous_layer_replication(
     
     # ===== NVLink优化：动态启用检查 =====
     should_enable, reason = _should_enable_nvlink_optimization(hidden_states, context)
+    decode_guard_reason: Optional[str] = None
+    if should_enable and not context.is_prefill and _DECODE_MIN_REPLICA_BATCH > 0:
+        decode_batch = hidden_states.size(0)
+        if decode_batch < _DECODE_MIN_REPLICA_BATCH:
+            should_enable = False
+            decode_guard_reason = (
+                f"Decode batch {decode_batch} < min_batch {_DECODE_MIN_REPLICA_BATCH}"
+            )
+            reason = decode_guard_reason
     DEBUG = os.environ.get("HB_NVLINK_LOG", "0") != "0"
     
     if not should_enable:
         if DEBUG:
-            print(f"[NVLink][execute_continuous_layer_replication] 跳过优化: {reason}")
+            extra = f" ({decode_guard_reason})" if decode_guard_reason else ""
+            print(f"[NVLink][execute_continuous_layer_replication] 跳过优化: {reason}{extra}")
         if is_placeholder_input and split_state is not None:
             hidden_states, residual = _recover_full_inputs_from_split_state(split_state)
         # **关键修复**：如果是最后一层且有分片状态，必须恢复原始 context
