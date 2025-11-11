@@ -905,37 +905,16 @@ def execute_continuous_layer_replication(
     # ===== 检查是否有上一层的分片状态（需要先处理占位符） =====
     split_state = _load_split_state_from_context(context)
     is_placeholder_input = False
+    placeholder_total: Optional[int] = None
     
-    # **关键修复**：如果输入是占位符（中间层未合并的情况），先从分片状态恢复真实数据
-    # 占位符特征：size(0) 很小（通常为1），且存在 split_state，且不是第一层
+    # **关键修复**：记录占位符信息，延迟到需要回退时再恢复
     if split_state is not None and not is_first_in_group:
-        # 检查是否是占位符（占位符的 token 数量会远小于分片状态中的数据）
         expected_tokens = split_state['hs_a'].size(0) + split_state['hs_b'].size(0)
         if hidden_states.size(0) < expected_tokens:
             is_placeholder_input = True
-            DEBUG_PLACEHOLDER = os.environ.get("HB_REPLICA_LOG", "0") != "0"
-            if DEBUG_PLACEHOLDER:
-                print(f"[ReplicaGroup][layer {layer_id}] Detected placeholder input, recovering from split_state")
-            
-            # 从分片状态恢复完整数据
-            out_a = split_state['hs_a']
-            out_b = split_state['hs_b']
-            res_a = split_state['res_a']
-            res_b = split_state['res_b']
-            device_a = split_state['device_a']
-            
-            # 合并恢复真实输入（仅用于 fallback 路径）
-            if out_b.device != device_a:
-                out_b = out_b.to(device_a, non_blocking=True)
-            hidden_states = torch.cat([out_a, out_b], dim=0)
-            
-            if res_a is not None or res_b is not None:
-                if res_b is not None and res_b.device != device_a:
-                    res_b = res_b.to(device_a, non_blocking=True)
-                residual = torch.cat([
-                    res_a if res_a is not None else torch.zeros_like(out_a),
-                    res_b if res_b is not None else torch.zeros_like(out_b)
-                ], dim=0)
+            placeholder_total = expected_tokens
+            if os.environ.get("HB_REPLICA_LOG", "0") != "0":
+                print(f"[ReplicaGroup][layer {layer_id}] Detected placeholder input, deferring recovery")
     
     # ===== NVLink优化：动态启用检查 =====
     should_enable, reason = _should_enable_nvlink_optimization(hidden_states, context)
@@ -944,6 +923,8 @@ def execute_continuous_layer_replication(
     if not should_enable:
         if DEBUG:
             print(f"[NVLink][execute_continuous_layer_replication] 跳过优化: {reason}")
+        if is_placeholder_input and split_state is not None:
+            hidden_states, residual = _recover_full_inputs_from_split_state(split_state)
         # **关键修复**：如果是最后一层且有分片状态，必须恢复原始 context
         # 因为中间层可能已经修改了 context，最后一层要保证后续普通层有正确的 context
         if is_last_in_group and split_state is not None:
@@ -1448,6 +1429,32 @@ def _clear_split_state_from_context(context: Context):
     """清除分片状态"""
     if hasattr(context, '_replica_split_state'):
         delattr(context, '_replica_split_state')
+
+
+def _recover_full_inputs_from_split_state(
+    split_state: Dict,
+) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+    device_a: torch.device = split_state['device_a']
+    hs_a: torch.Tensor = split_state['hs_a']
+    hs_b: torch.Tensor = split_state['hs_b']
+    res_a: Optional[torch.Tensor] = split_state['res_a']
+    res_b: Optional[torch.Tensor] = split_state['res_b']
+
+    if hs_b.device != device_a:
+        hs_b = hs_b.to(device_a, non_blocking=True)
+
+    hidden_states = torch.cat([hs_a, hs_b], dim=0)
+
+    if res_a is None and res_b is None:
+        residual = None
+    else:
+        res_a_local = res_a if res_a is not None else torch.zeros_like(hs_a)
+        if res_b is not None and res_b.device != device_a:
+            res_b = res_b.to(device_a, non_blocking=True)
+        res_b_local = res_b if res_b is not None else torch.zeros_like(hs_b)
+        residual = torch.cat([res_a_local, res_b_local], dim=0)
+
+    return hidden_states, residual
 
 def _create_split_output_placeholder(
     out_a: torch.Tensor,
