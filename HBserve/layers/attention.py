@@ -3,6 +3,7 @@ import torch
 from torch import nn
 import triton
 import triton.language as tl
+import torch.cuda.nvtx as nvtx
 
 from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 from HBserve.utils.context import get_context
@@ -82,10 +83,15 @@ class Attention(nn.Module):
         self.k_cache = self.v_cache = torch.tensor([])
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
-        DEBUG = os.environ.get("HB_DEBUG", "0") != "0"
+        debug_flag = os.environ.get("HB_DEBUG", "0") != "0"
+        flash_debug_flag = os.environ.get("HB_FLASH_LOG", "0") != "0"
+        DEBUG = debug_flag or flash_debug_flag
         def log(msg):
             if DEBUG:
                 print(f"[HB-Debug][Attention] {msg}")
+        def flash_log(msg):
+            if flash_debug_flag:
+                print(f"[HB-Flash][Attention] {msg}")
         o: torch.Tensor
         q = q.view(-1, self.num_heads, self.head_dim)
         k = k.view(-1, self.num_kv_heads, self.head_dim)
@@ -141,7 +147,11 @@ class Attention(nn.Module):
                 k, v = k_cache_dev, v_cache_dev # 使用KV Cache（确保与q同设备）
             # q => 新的token，不包含prefix caching
             # k,v => 包含prefix caching的KV
-            log("call flash_attn_varlen_func")
+            flash_log(
+                "call flash_attn_varlen_func "
+                f"layer={getattr(context, 'layer_id', getattr(context, '_layer_id', 'unknown'))} "
+                f"q_dev={q.device} k_dev={k.device} v_dev={v.device}"
+            )
             # 确保可变长输入相关张量连续
             if hasattr(context, "cu_seqlens_q") and context.cu_seqlens_q is not None:
                 context.cu_seqlens_q = context.cu_seqlens_q.contiguous()
@@ -149,15 +159,53 @@ class Attention(nn.Module):
                 context.cu_seqlens_k = context.cu_seqlens_k.contiguous()
             if context.block_tables is not None:
                 context.block_tables = context.block_tables.contiguous()
-            o = flash_attn_varlen_func(q, k, v,
-                                       max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
-                                       max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
-                                       softmax_scale=self.scale, causal=True, block_table=context.block_tables) 
+            nvtx_range_name = (
+                f"flash_attn_varlen[layer={getattr(context, 'layer_id', getattr(context, '_layer_id', 'unknown'))}]"
+                if flash_debug_flag else None
+            )
+            if nvtx_range_name:
+                nvtx.range_push(nvtx_range_name)
+            try:
+                o = flash_attn_varlen_func(
+                    q,
+                    k,
+                    v,
+                    max_seqlen_q=context.max_seqlen_q,
+                    cu_seqlens_q=context.cu_seqlens_q,
+                    max_seqlen_k=context.max_seqlen_k,
+                    cu_seqlens_k=context.cu_seqlens_k,
+                    softmax_scale=self.scale,
+                    causal=True,
+                    block_table=context.block_tables,
+                )
+            finally:
+                if nvtx_range_name:
+                    nvtx.range_pop()
         else:    # decode
             # TODO：check q，k，v shape
-            log("call flash_attn_with_kvcache")
-            o = flash_attn_with_kvcache(q.unsqueeze(1), k_cache_dev, v_cache_dev,
-                                        cache_seqlens=context.context_lens, block_table=context.block_tables, 
-                                        softmax_scale=self.scale, causal=True)
+            flash_log(
+                "call flash_attn_with_kvcache "
+                f"layer={getattr(context, 'layer_id', getattr(context, '_layer_id', 'unknown'))} "
+                f"q_dev={q.device} k_cache_dev={k_cache_dev.device if k_cache_dev.numel() else None}"
+            )
+            nvtx_range_name = (
+                f"flash_attn_kvcache[layer={getattr(context, 'layer_id', getattr(context, '_layer_id', 'unknown'))}]"
+                if flash_debug_flag else None
+            )
+            if nvtx_range_name:
+                nvtx.range_push(nvtx_range_name)
+            try:
+                o = flash_attn_with_kvcache(
+                    q.unsqueeze(1),
+                    k_cache_dev,
+                    v_cache_dev,
+                    cache_seqlens=context.context_lens,
+                    block_table=context.block_tables,
+                    softmax_scale=self.scale,
+                    causal=True,
+                )
+            finally:
+                if nvtx_range_name:
+                    nvtx.range_pop()
         o = o.view(-1, self.num_heads * self.head_dim)
         return o
