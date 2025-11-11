@@ -516,54 +516,74 @@ def execute_attention_offload_forward(
     stream_a = torch.cuda.Stream(device=src_device) if src_device.type == 'cuda' else None
     stream_b = torch.cuda.Stream(device=offload_device) if offload_device.type == 'cuda' else None
     
-    start_a = end_a = start_b = end_b = None
-    if src_device.type == 'cuda':
-        start_a = torch.cuda.Event(enable_timing=True)
-        end_a = torch.cuda.Event(enable_timing=True)
-    if offload_device.type == 'cuda':
-        start_b = torch.cuda.Event(enable_timing=True)
-        end_b = torch.cuda.Event(enable_timing=True)
-    
     # 执行 A
     if stream_a is not None:
         with torch.cuda.stream(stream_a):
-            if start_a is not None:
-                start_a.record(stream_a)
-            set_context(**ctx_a)
-            out_a = src_attn(pos_a, hs_a)
-            if end_a is not None:
-                end_a.record(stream_a)
+            ctx_a_local = set_context(context=Context(
+                is_prefill=context.is_prefill,
+                cu_seqlens_q=ctx_a['cu_seqlens_q'],
+                cu_seqlens_k=ctx_a['cu_seqlens_k'],
+                max_seqlen_q=context.max_seqlen_q,
+                max_seqlen_k=context.max_seqlen_k,
+                slot_mapping=ctx_a['slot_mapping'],
+                context_lens=ctx_a['context_lens'],
+                block_tables=ctx_a['block_tables'],
+            ), device=src_device, stream=stream_a)
+            try:
+                out_a = src_attn(pos_a, hs_a, ctx=ctx_a_local)
+            finally:
+                reset_context(device=src_device, stream=stream_a)
     else:
-        set_context(**ctx_a)
-        out_a = src_attn(pos_a, hs_a)
-    
+        ctx_a_local = set_context(context=Context(
+            is_prefill=context.is_prefill,
+            cu_seqlens_q=ctx_a['cu_seqlens_q'],
+            cu_seqlens_k=ctx_a['cu_seqlens_k'],
+            max_seqlen_q=context.max_seqlen_q,
+            max_seqlen_k=context.max_seqlen_k,
+            slot_mapping=ctx_a['slot_mapping'],
+            context_lens=ctx_a['context_lens'],
+            block_tables=ctx_a['block_tables'],
+        ), device=src_device)
+        try:
+            out_a = src_attn(pos_a, hs_a, ctx=ctx_a_local)
+        finally:
+            reset_context(device=src_device)
+
     # 执行 B
     if stream_b is not None:
         with torch.cuda.stream(stream_b):
-            if start_b is not None:
-                start_b.record(stream_b)
-            set_context(**ctx_b)
-            out_b = offload_attn(pos_b, hs_b)
-            if end_b is not None:
-                end_b.record(stream_b)
+            ctx_b_local = set_context(context=Context(
+                is_prefill=context.is_prefill,
+                cu_seqlens_q=ctx_b['cu_seqlens_q'],
+                cu_seqlens_k=ctx_b['cu_seqlens_k'],
+                max_seqlen_q=context.max_seqlen_q,
+                max_seqlen_k=context.max_seqlen_k,
+                slot_mapping=ctx_b['slot_mapping'],
+                context_lens=ctx_b['context_lens'],
+                block_tables=ctx_b['block_tables'],
+            ), device=offload_device, stream=stream_b)
+            try:
+                out_b = offload_attn(pos_b, hs_b, ctx=ctx_b_local)
+            finally:
+                reset_context(device=offload_device, stream=stream_b)
     else:
-        set_context(**ctx_b)
-        out_b = offload_attn(pos_b, hs_b)
-    
+        ctx_b_local = set_context(context=Context(
+            is_prefill=context.is_prefill,
+            cu_seqlens_q=ctx_b['cu_seqlens_q'],
+            cu_seqlens_k=ctx_b['cu_seqlens_k'],
+            max_seqlen_q=context.max_seqlen_q,
+            max_seqlen_k=context.max_seqlen_k,
+            slot_mapping=ctx_b['slot_mapping'],
+            context_lens=ctx_b['context_lens'],
+            block_tables=ctx_b['block_tables'],
+        ), device=offload_device)
+        try:
+            out_b = offload_attn(pos_b, hs_b, ctx=ctx_b_local)
+        finally:
+            reset_context(device=offload_device)
+
     # 移除同步操作以提高性能（NVLink优化）
-    
-    # 恢复原始 context
-    set_context(
-        is_prefill=context.is_prefill,
-        cu_seqlens_q=context.cu_seqlens_q,
-        cu_seqlens_k=context.cu_seqlens_k,
-        max_seqlen_q=context.max_seqlen_q,
-        max_seqlen_k=context.max_seqlen_k,
-        slot_mapping=context.slot_mapping,
-        context_lens=context.context_lens,
-        block_tables=context.block_tables
-    )
-    
+
     # 合并结果
     if out_b.device != src_device:
         out_b = out_b.to(src_device, non_blocking=True)
@@ -748,17 +768,9 @@ def execute_layer_replication_forward(
         if res_b is not None:
             res_b = res_b.to(replica_device, non_blocking=True)
     
-    # 准备stream和计时
+    # 准备 stream
     stream_a = torch.cuda.Stream(device=layer_device) if layer_device.type == 'cuda' else None
     stream_b = torch.cuda.Stream(device=replica_device) if replica_device.type == 'cuda' else None
-    
-    start_a = end_a = start_b = end_b = None
-    if layer_device.type == 'cuda':
-        start_a = torch.cuda.Event(enable_timing=True)
-        end_a = torch.cuda.Event(enable_timing=True)
-    if replica_device.type == 'cuda':
-        start_b = torch.cuda.Event(enable_timing=True)
-        end_b = torch.cuda.Event(enable_timing=True)
     
     # ===== 修复5: 添加调试日志 =====
     if os.environ.get("HB_REPLICA_LOG", "0") != "0":
@@ -772,8 +784,6 @@ def execute_layer_replication_forward(
     # 并行执行
     if stream_a is not None:
         with torch.cuda.stream(stream_a):
-            if start_a is not None:
-                start_a.record(stream_a)
             set_context(
                 is_prefill=orig_ctx.is_prefill,
                 cu_seqlens_q=cu_seqlens_q_a,
@@ -785,8 +795,6 @@ def execute_layer_replication_forward(
                 block_tables=block_tables_a
             )
             out_a, res_out_a = layer(pos_a, hs_a, res_a)
-            if end_a is not None:
-                end_a.record(stream_a)
     else:
         set_context(
             is_prefill=orig_ctx.is_prefill,
@@ -802,8 +810,6 @@ def execute_layer_replication_forward(
     
     if stream_b is not None:
         with torch.cuda.stream(stream_b):
-            if start_b is not None:
-                start_b.record(stream_b)
             set_context(
                 is_prefill=orig_ctx.is_prefill,
                 cu_seqlens_q=cu_seqlens_q_b,
@@ -815,8 +821,6 @@ def execute_layer_replication_forward(
                 block_tables=block_tables_b
             )
             out_b, res_out_b = replica(pos_b, hs_b, res_b)
-            if end_b is not None:
-                end_b.record(stream_b)
     else:
         set_context(
             is_prefill=orig_ctx.is_prefill,
