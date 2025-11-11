@@ -1055,6 +1055,7 @@ def execute_continuous_layer_replication(
             return hidden_states, residual
         else:
             # 第一层/中间层：保存分片状态，不合并（避免跨设备传输）
+            print(f"[ReplicaGroup][layer {layer_id}] Saving split state: out_a on {out_a.device}, out_b on {out_b.device}")
             _save_split_state_to_context(
                 context,
                 split_idx=split_idx,
@@ -1065,8 +1066,8 @@ def execute_continuous_layer_replication(
                 res_b=res_b,
                 pos_a=split_data['pos_a'],
                 pos_b=split_data['pos_b'],
-                ctx_a=split_data['ctx_a'],
-                ctx_b=split_data['ctx_b'],
+                ctx_a=_context_to_device(split_data['ctx_a'], layer_device),
+                ctx_b=_context_to_device(split_data['ctx_b'], replica_device),
                 orig_ctx=orig_ctx,
                 device_a=layer_device,
                 device_b=replica_device
@@ -1314,6 +1315,36 @@ def _context_to_device(ctx: Optional[Dict], device: torch.device) -> Optional[Di
     return moved
 
 
+def _debug_format_tensor(t: Optional[torch.Tensor]) -> str:
+    if t is None:
+        return "None"
+    return f"shape={tuple(t.shape)} device={t.device}"
+
+
+def _log_split_data(prefix: str, split_data: Dict) -> None:
+    if os.environ.get("HB_REPLICA_LOG", "0") == "0":
+        return
+    print(
+        f"[ReplicaGroup][{prefix}] hs_a={_debug_format_tensor(split_data['hs_a'])} "
+        f"hs_b={_debug_format_tensor(split_data['hs_b'])} res_a={_debug_format_tensor(split_data['res_a'])} "
+        f"res_b={_debug_format_tensor(split_data['res_b'])}"
+    )
+    ctx_a = split_data.get('ctx_a')
+    ctx_b = split_data.get('ctx_b')
+    if isinstance(ctx_a, dict):
+        slot_a = ctx_a.get('slot_mapping')
+        lens_a = ctx_a.get('context_lens')
+        print(
+            f"  ctx_a.slot_mapping={_debug_format_tensor(slot_a)} ctx_a.context_lens={_debug_format_tensor(lens_a)}"
+        )
+    if isinstance(ctx_b, dict):
+        slot_b = ctx_b.get('slot_mapping')
+        lens_b = ctx_b.get('context_lens')
+        print(
+            f"  ctx_b.slot_mapping={_debug_format_tensor(slot_b)} ctx_b.context_lens={_debug_format_tensor(lens_b)}"
+        )
+
+
 def _move_split_data_to_devices(
     split_data: Dict,
     device_a: torch.device,
@@ -1331,6 +1362,7 @@ def _move_split_data_to_devices(
     if split_data['res_b'] is not None:
         split_data['res_b'] = split_data['res_b'].to(device_b, non_blocking=True)
     split_data['ctx_b'] = _context_to_device(split_data['ctx_b'], device_b)
+    _log_split_data("move_split_data_to_devices", split_data)
     
     return split_data
 
@@ -1672,62 +1704,66 @@ def _parallel_execute_split_layer_no_sync(
     stream_b = _get_or_create_stream(device_b) if device_b.type == 'cuda' else None
     
     # 执行 A（在 device_a 上）
+    ctx_a = Context(
+        is_prefill=orig_ctx.is_prefill,
+        cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
+        cu_seqlens_k=split_data['ctx_a']['cu_seqlens_k'],
+        max_seqlen_q=orig_ctx.max_seqlen_q,
+        max_seqlen_k=orig_ctx.max_seqlen_k,
+        slot_mapping=split_data['ctx_a']['slot_mapping'],
+        context_lens=split_data['ctx_a']['context_lens'],
+        block_tables=split_data['ctx_a']['block_tables'],
+    )
     if stream_a is not None:
         with torch.cuda.stream(stream_a):
-            torch.cuda.set_device(device_a)  # **关键**：设置正确的设备
-            set_context(
-                is_prefill=orig_ctx.is_prefill,
-                cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
-                cu_seqlens_k=split_data['ctx_a']['cu_seqlens_k'],
-                max_seqlen_q=orig_ctx.max_seqlen_q,
-                max_seqlen_k=orig_ctx.max_seqlen_k,
-                slot_mapping=split_data['ctx_a']['slot_mapping'],
-                context_lens=split_data['ctx_a']['context_lens'],
-                block_tables=split_data['ctx_a']['block_tables']
-            )
+            torch.cuda.set_device(device_a)
+            set_context(context=ctx_a, device=device_a, stream=stream_a)
             out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
+            if os.environ.get("HB_REPLICA_LOG", "0") != "0":
+                print(
+                    f"[ReplicaGroup][device_a] stream={hex(stream_a.cuda_stream)} hs={_debug_format_tensor(split_data['hs_a'])}"
+                )
+            reset_context(device=device_a, stream=stream_a)
     else:
         torch.cuda.set_device(device_a)
-        set_context(
-            is_prefill=orig_ctx.is_prefill,
-            cu_seqlens_q=split_data['ctx_a']['cu_seqlens_q'],
-            cu_seqlens_k=split_data['ctx_a']['cu_seqlens_k'],
-            max_seqlen_q=orig_ctx.max_seqlen_q,
-            max_seqlen_k=orig_ctx.max_seqlen_k,
-            slot_mapping=split_data['ctx_a']['slot_mapping'],
-            context_lens=split_data['ctx_a']['context_lens'],
-            block_tables=split_data['ctx_a']['block_tables']
-        )
+        set_context(context=ctx_a, device=device_a)
         out_a, res_a = layer_a(split_data['pos_a'], split_data['hs_a'], split_data['res_a'])
+        if os.environ.get("HB_REPLICA_LOG", "0") != "0":
+            print(
+                f"[ReplicaGroup][device_a] default stream hs={_debug_format_tensor(split_data['hs_a'])}"
+            )
+        reset_context(device=device_a)
     
     # 执行 B（在 device_b 上）
+    ctx_b = Context(
+        is_prefill=orig_ctx.is_prefill,
+        cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
+        cu_seqlens_k=split_data['ctx_b']['cu_seqlens_k'],
+        max_seqlen_q=orig_ctx.max_seqlen_q,
+        max_seqlen_k=orig_ctx.max_seqlen_k,
+        slot_mapping=split_data['ctx_b']['slot_mapping'],
+        context_lens=split_data['ctx_b']['context_lens'],
+        block_tables=split_data['ctx_b']['block_tables'],
+    )
     if stream_b is not None:
         with torch.cuda.stream(stream_b):
-            torch.cuda.set_device(device_b)  # **关键**：设置正确的设备
-            set_context(
-                is_prefill=orig_ctx.is_prefill,
-                cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
-                cu_seqlens_k=split_data['ctx_b']['cu_seqlens_k'],
-                max_seqlen_q=orig_ctx.max_seqlen_q,
-                max_seqlen_k=orig_ctx.max_seqlen_k,
-                slot_mapping=split_data['ctx_b']['slot_mapping'],
-                context_lens=split_data['ctx_b']['context_lens'],
-                block_tables=split_data['ctx_b']['block_tables']
-            )
+            torch.cuda.set_device(device_b)
+            set_context(context=ctx_b, device=device_b, stream=stream_b)
             out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
+            if os.environ.get("HB_REPLICA_LOG", "0") != "0":
+                print(
+                    f"[ReplicaGroup][device_b] stream={hex(stream_b.cuda_stream)} hs={_debug_format_tensor(split_data['hs_b'])}"
+                )
+            reset_context(device=device_b, stream=stream_b)
     else:
         torch.cuda.set_device(device_b)
-        set_context(
-            is_prefill=orig_ctx.is_prefill,
-            cu_seqlens_q=split_data['ctx_b']['cu_seqlens_q'],
-            cu_seqlens_k=split_data['ctx_b']['cu_seqlens_k'],
-            max_seqlen_q=orig_ctx.max_seqlen_q,
-            max_seqlen_k=orig_ctx.max_seqlen_k,
-            slot_mapping=split_data['ctx_b']['slot_mapping'],
-            context_lens=split_data['ctx_b']['context_lens'],
-            block_tables=split_data['ctx_b']['block_tables']
-        )
+        set_context(context=ctx_b, device=device_b)
         out_b, res_b = layer_b(split_data['pos_b'], split_data['hs_b'], split_data['res_b'])
+        if os.environ.get("HB_REPLICA_LOG", "0") != "0":
+            print(
+                f"[ReplicaGroup][device_b] default stream hs={_debug_format_tensor(split_data['hs_b'])}"
+            )
+        reset_context(device=device_b)
     
     # **性能优化**：中间层不同步，让GPU继续并行
     # 只在最后一层调用时才需要同步（外层会处理）
