@@ -1111,6 +1111,19 @@ def execute_continuous_layer_replication(
         token_split_idx_val = split_state['token_split_idx']
         ctx_a, ctx_b = _split_context_for_replication(orig_ctx, split_idx_val, token_split_idx_val)
         
+        ctx_a_cached = split_state.get('ctx_a')
+        ctx_b_cached = split_state.get('ctx_b')
+
+        if ctx_a_cached is None or ctx_b_cached is None:
+            ctx_a, ctx_b = _split_context_for_replication(orig_ctx, split_idx_val, token_split_idx_val)
+            ctx_a_prepared = _context_to_device(ctx_a, layer_device)
+            ctx_b_prepared = _context_to_device(ctx_b, replica_device)
+            split_state['ctx_a'] = ctx_a_prepared
+            split_state['ctx_b'] = ctx_b_prepared
+        else:
+            ctx_a_prepared = ctx_a_cached
+            ctx_b_prepared = ctx_b_cached
+
         split_data = {
             'hs_a': hs_a,
             'hs_b': hs_b,
@@ -1118,8 +1131,8 @@ def execute_continuous_layer_replication(
             'pos_b': pos_b,
             'res_a': res_a,
             'res_b': res_b,
-            'ctx_a': _context_to_device(ctx_a, layer_device),
-            'ctx_b': _context_to_device(ctx_b, replica_device),
+            'ctx_a': ctx_a_prepared,
+            'ctx_b': ctx_b_prepared,
         }
         
         # 使用稳定版本的并行执行
@@ -1168,8 +1181,8 @@ def execute_continuous_layer_replication(
                 res_b=res_out_b,
                 pos_a=pos_a,
                 pos_b=pos_b,
-                ctx_a=None,  # **激进优化**：不保存context，减少内存开销
-                ctx_b=None,
+                ctx_a=split_data['ctx_a'],
+                ctx_b=split_data['ctx_b'],
                 orig_ctx=orig_ctx,
                 device_a=layer_device,
                 device_b=replica_device
