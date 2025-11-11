@@ -114,19 +114,36 @@ class Attention(nn.Module):
         if hasattr(context, "context_lens") and context.context_lens is not None and context.context_lens.device != dev:
             context.context_lens = context.context_lens.to(dev, non_blocking=True)
 
-        k_cache, v_cache = self.k_cache, self.v_cache # 拿到KV Cache
-        k_cache_dev = k_cache if (k_cache.numel() == 0 or k_cache.device == dev) else k_cache.to(dev)
-        v_cache_dev = v_cache if (v_cache.numel() == 0 or v_cache.device == dev) else v_cache.to(dev)
+        k_cache, v_cache = self.k_cache, self.v_cache  # 拿到KV Cache
+        k_cache_dev = k_cache
+        v_cache_dev = v_cache
+        migrated = False
+        if k_cache.numel() and k_cache.device != dev:
+            k_cache_dev = k_cache.to(dev, non_blocking=True)
+            migrated = True
+            flash_log(f"migrate k_cache from {k_cache.device} to {dev}")
+        if v_cache.numel() and v_cache.device != dev:
+            v_cache_dev = v_cache.to(dev, non_blocking=True)
+            migrated = True
+            flash_log(f"migrate v_cache from {v_cache.device} to {dev}")
         # 保证传入triton/flash-attn的数据在同一设备且连续
         if context.slot_mapping is not None:
             context.slot_mapping = context.slot_mapping.contiguous()
         q = q.contiguous()
         k = k.contiguous()
         v = v.contiguous()
-        if k_cache_dev.numel():
+        if k_cache_dev.numel() and not k_cache_dev.is_contiguous():
             k_cache_dev = k_cache_dev.contiguous()
-        if v_cache_dev.numel():
+            migrated = True
+        if v_cache_dev.numel() and not v_cache_dev.is_contiguous():
             v_cache_dev = v_cache_dev.contiguous()
+            migrated = True
+        if migrated:
+            # 将 cache 固定在当前执行设备，避免后续重复跨卡复制
+            if k_cache_dev.numel():
+                self.k_cache = k_cache_dev.detach()
+            if v_cache_dev.numel():
+                self.v_cache = v_cache_dev.detach()
         if DEBUG:
             log(f"slot_mapping.dev={getattr(context.slot_mapping,'device',None)} is_cuda={getattr(context.slot_mapping,'is_cuda',False)}")
             log(f"k_cache.dev={k_cache_dev.device if k_cache_dev.numel() else None} v_cache.dev={v_cache_dev.device if v_cache_dev.numel() else None}")
