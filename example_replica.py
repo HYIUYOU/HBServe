@@ -12,7 +12,7 @@ def main():
         gpu_memory_utilization=0.9,
         # Local DP（连续层副本）
         local_dp_start_layer=9,    # 第10层（含）
-        local_dp_end_layer=20,     # 第20层（不含）
+        local_dp_end_layer=15,     # 第20层（不含）
         local_dp_device=1,          # 复制到 GPU1
         use_cuda_graph = True
     )
