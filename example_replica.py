@@ -13,27 +13,15 @@ def main():
         # Local DP（连续层副本）
         local_dp_start_layer=9,    # 第10层（含）
         local_dp_end_layer=20,     # 第20层（不含）
-        local_dp_device=1          # 复制到 GPU1
+        local_dp_device=1,          # 复制到 GPU1
+        use_cuda_graph = True
     )
 
     sampling_params = SamplingParams(temperature=0.6, max_tokens=256)
     prompts = [
         "introduce yourself",
         "describe the benefits of model parallelism",
-        # "introduce yourself",
-        # "list all prime numbers within 100",
-        # "introduce yourself",
-        # "list all prime numbers within 100",
-        # "introduce yourself",
-        # "list all prime numbers within 100",
-        # "introduce yourself",
-        # "list all prime numbers within 100",
-        # "introduce yourself",
-        # "list all prime numbers within 100",
-        # "introduce yourself",
-        # "list all prime numbers within 100",
-        # "introduce yourself",
-        # "list all prime numbers within 100",
+        
     ]*100
     from HBserve.utils.loader import load_longbench_prompts
     jsonl_file = "/home/admin/workspace/aop_lab/app_source/data/longbench/2wikimqa_e.jsonl"
