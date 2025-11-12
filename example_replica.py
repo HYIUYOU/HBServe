@@ -12,7 +12,7 @@ def main():
         gpu_memory_utilization=0.9,
         # Local DP（连续层副本）
         local_dp_start_layer=9,    # 第10层（含）
-        local_dp_end_layer=20,     # 第20层（不含）
+        local_dp_end_layer=30,     # 第20层（不含）
         local_dp_device=1          # 复制到 GPU1
     )
 
@@ -34,7 +34,7 @@ def main():
         # "list all prime numbers within 100",
         # "introduce yourself",
         # "list all prime numbers within 100",
-    ]
+    ]*100
     from HBserve.utils.loader import load_longbench_prompts
     jsonl_file = "/home/admin/workspace/aop_lab/app_source/data/longbench/2wikimqa_e.jsonl"
     prompts = load_longbench_prompts(jsonl_file, max_samples=10)  

@@ -26,7 +26,7 @@ def main():
         # "list all prime numbers within 100",
         # "introduce yourself",
         # "list all prime numbers within 100",
-    ]
+    ]*200
     from HBserve.utils.loader import load_longbench_prompts
     jsonl_file = "/home/admin/workspace/aop_lab/app_source/data/longbench/2wikimqa_e.jsonl"
     prompts = load_longbench_prompts(jsonl_file, max_samples=10)  
