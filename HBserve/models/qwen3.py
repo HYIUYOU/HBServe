@@ -178,6 +178,31 @@ class Qwen3Model(nn.Module):
         self.embed_tokens = VocabParallelEmbedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([Qwen3DecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.local_dp_start = getattr(config, "local_dp_start_layer", None)
+        self.local_dp_end = getattr(config, "local_dp_end_layer", None)
+        self.local_dp_device = getattr(config, "local_dp_device", None)
+        self.local_dp_enabled = (
+            self.local_dp_start is not None and
+            self.local_dp_end is not None and
+            self.local_dp_device is not None and
+            0 <= self.local_dp_start < self.local_dp_end <= len(self.layers)
+        )
+        if self.local_dp_enabled:
+            target_device = self.local_dp_device
+            if isinstance(target_device, int):
+                target_device = f"cuda:{target_device}"
+            self._dp_target_device = torch.device(target_device)
+            dp_layers = []
+            for i in range(self.local_dp_start, self.local_dp_end):
+                replica = copy.deepcopy(self.layers[i]).to(self._dp_target_device)
+                for m in replica.modules():
+                    if hasattr(m, "k_cache") and hasattr(m, "v_cache"):
+                        setattr(m, "is_replica", True)
+                        setattr(m, "replica_device", self._dp_target_device)
+                dp_layers.append(replica)
+            self.dp_layers = nn.ModuleList(dp_layers)
+        else:
+            self.dp_layers = None
 
     def forward(
         self,
@@ -186,8 +211,95 @@ class Qwen3Model(nn.Module):
     ) -> torch.Tensor:
         hidden_states = self.embed_tokens(input_ids)
         residual = None
-        for layer in self.layers:
-            hidden_states, residual = layer(positions, hidden_states, residual)
+        if not self.local_dp_enabled:
+            for layer in self.layers:
+                hidden_states, residual = layer(positions, hidden_states, residual)
+            hidden_states, _ = self.norm(hidden_states, residual)
+            return hidden_states
+        start = self.local_dp_start
+        end = self.local_dp_end
+        for i in range(start):
+            hidden_states, residual = self.layers[i](positions, hidden_states, residual)
+        ctx = get_context()
+        dev0 = hidden_states.device
+        if ctx.is_prefill:
+            B = ctx.cu_seqlens_q.numel() - 1
+            mid = B // 2
+            n0 = ctx.cu_seqlens_q[mid].item()
+            pos0, pos1 = positions[:n0], positions[n0:]
+            hs0, hs1 = hidden_states[:n0], hidden_states[n0:]
+            if residual is None:
+                res0 = None
+                res1 = None
+            else:
+                res0, res1 = residual[:n0], residual[n0:]
+            cuq0 = ctx.cu_seqlens_q[:mid+1] - ctx.cu_seqlens_q[0]
+            cuk0 = ctx.cu_seqlens_k[:mid+1] - ctx.cu_seqlens_k[0]
+            cuq1 = ctx.cu_seqlens_q[mid:] - ctx.cu_seqlens_q[mid]
+            cuk1 = ctx.cu_seqlens_k[mid:] - ctx.cu_seqlens_k[mid]
+            sm0 = ctx.slot_mapping[:n0]
+            sm1 = ctx.slot_mapping[n0:]
+            bt0 = ctx.block_tables[:mid] if ctx.block_tables is not None else None
+            bt1 = ctx.block_tables[mid:] if ctx.block_tables is not None else None
+            ctx_orig = (ctx.is_prefill, ctx.cu_seqlens_q, ctx.cu_seqlens_k, ctx.max_seqlen_q, ctx.max_seqlen_k, ctx.slot_mapping, ctx.context_lens, ctx.block_tables)
+            # move shard-1 context to dp device to avoid per-layer copies
+            cuq1_d = cuq1.to(self._dp_target_device, non_blocking=True)
+            cuk1_d = cuk1.to(self._dp_target_device, non_blocking=True)
+            sm1_d = sm1.to(self._dp_target_device, non_blocking=True)
+            bt1_d = bt1.to(self._dp_target_device, non_blocking=True) if bt1 is not None else None
+            set_context(True, cuq1_d, cuk1_d, ctx.max_seqlen_q, ctx.max_seqlen_k, sm1_d, None, bt1_d)
+            pos1_d = pos1.to(self._dp_target_device, non_blocking=True)
+            hs1_d = hs1.to(self._dp_target_device, non_blocking=True)
+            res1_d = None if res1 is None else res1.to(self._dp_target_device, non_blocking=True)
+            for j in range(start, end):
+                hs1_d, res1_d = self.dp_layers[j - start](pos1_d, hs1_d, res1_d)
+            set_context(True, cuq0, cuk0, ctx.max_seqlen_q, ctx.max_seqlen_k, sm0, None, bt0)
+            hs0_d, res0_d = hs0, res0
+            for j in range(start, end):
+                hs0_d, res0_d = self.layers[j](pos0, hs0_d, res0_d)
+            hs = torch.cat([hs0_d, hs1_d.to(dev0, non_blocking=True)], dim=0)
+            res = None if res0_d is None else torch.cat([res0_d, res1_d.to(dev0, non_blocking=True)], dim=0)
+            is_prefill, cuq, cuk, msq, msk, sm, cl, bt = ctx_orig
+            set_context(is_prefill, cuq, cuk, msq, msk, sm, cl, bt)
+            hidden_states, residual = hs, res
+        else:
+            B = positions.size(0)
+            mid = B // 2
+            pos0, pos1 = positions[:mid], positions[mid:]
+            hs0, hs1 = hidden_states[:mid], hidden_states[mid:]
+            if residual is None:
+                res0 = None
+                res1 = None
+            else:
+                res0, res1 = residual[:mid], residual[mid:]
+            sm0 = ctx.slot_mapping[:mid]
+            sm1 = ctx.slot_mapping[mid:]
+            cl0 = ctx.context_lens[:mid]
+            cl1 = ctx.context_lens[mid:]
+            bt0 = ctx.block_tables[:mid] if ctx.block_tables is not None else None
+            bt1 = ctx.block_tables[mid:] if ctx.block_tables is not None else None
+            ctx_orig = (ctx.is_prefill, None, None, 0, 0, ctx.slot_mapping, ctx.context_lens, ctx.block_tables)
+            # move shard-1 context to dp device to avoid per-layer copies
+            sm1_d = sm1.to(self._dp_target_device, non_blocking=True)
+            cl1_d = cl1.to(self._dp_target_device, non_blocking=True)
+            bt1_d = bt1.to(self._dp_target_device, non_blocking=True) if bt1 is not None else None
+            set_context(False, slot_mapping=sm1_d, context_lens=cl1_d, block_tables=bt1_d)
+            pos1_d = pos1.to(self._dp_target_device, non_blocking=True)
+            hs1_d = hs1.to(self._dp_target_device, non_blocking=True)
+            res1_d = None if res1 is None else res1.to(self._dp_target_device, non_blocking=True)
+            for j in range(start, end):
+                hs1_d, res1_d = self.dp_layers[j - start](pos1_d, hs1_d, res1_d)
+            set_context(False, slot_mapping=sm0, context_lens=cl0, block_tables=bt0)
+            hs0_d, res0_d = hs0, res0
+            for j in range(start, end):
+                hs0_d, res0_d = self.layers[j](pos0, hs0_d, res0_d)
+            hs = torch.cat([hs0_d, hs1_d.to(dev0, non_blocking=True)], dim=0)
+            res = None if res0_d is None else torch.cat([res0_d, res1_d.to(dev0, non_blocking=True)], dim=0)
+            is_prefill, cuq, cuk, msq, msk, sm, cl, bt = ctx_orig
+            set_context(is_prefill, cuq, cuk, msq, msk, sm, cl, bt)
+            hidden_states, residual = hs, res
+        for i in range(end, len(self.layers)):
+            hidden_states, residual = self.layers[i](positions, hidden_states, residual)
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
         
@@ -211,6 +323,7 @@ class Qwen3ForCausalLM(nn.Module):
         self.lm_head = ParallelLMHead(config.vocab_size, config.hidden_size)
         if config.tie_word_embeddings:
             self.lm_head.weight.data = self.model.embed_tokens.weight.data
+        self.local_dp_enabled = getattr(self.model, "local_dp_enabled", False)
 
     def forward(
         self,

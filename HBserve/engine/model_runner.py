@@ -32,9 +32,17 @@ class ModelRunner:
         # self.model = Qwen3ForCausalLM(hf_config)
         self.model = create_model_from_config(hf_config)
         load_model(self.model, config.model)
+        if getattr(self.model, "local_dp_enabled", False):
+            core = getattr(self.model, "model", None)
+            if core is not None and getattr(core, "dp_layers", None):
+                s = core.local_dp_start
+                for i in range(core.local_dp_start, core.local_dp_end):
+                    core.dp_layers[i - s].load_state_dict(core.layers[i].state_dict(), strict=True)
         self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()
+        if getattr(self.model, "local_dp_enabled", False):
+            self.enforce_eager = True
         if not self.enforce_eager:
             self.capture_cudagraph()
         torch.set_default_device("cpu")
@@ -113,10 +121,29 @@ class ModelRunner:
         self.kv_cache = torch.zeros(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, hf_config.head_dim)
         layer_id = 0
         for module in self.model.modules():
-            if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
+            if hasattr(module, "k_cache") and hasattr(module, "v_cache") and not getattr(module, "is_replica", False):
                 module.k_cache = self.kv_cache[0, layer_id]
                 module.v_cache = self.kv_cache[1, layer_id]
                 layer_id += 1
+        core = getattr(self.model, "model", None)
+        if core is not None and getattr(core, "dp_layers", None):
+            dp_layers = core.dp_layers
+            dp_num = len(dp_layers)
+            if dp_num:
+                dp_device = core._dp_target_device
+                self.dp_kv_cache = torch.zeros(
+                    2,
+                    dp_num,
+                    config.num_kvcache_blocks,
+                    self.block_size,
+                    num_kv_heads,
+                    hf_config.head_dim,
+                    device=dp_device,
+                )
+                for i, layer in enumerate(dp_layers):
+                    attn = layer.self_attn.attn
+                    attn.k_cache = self.dp_kv_cache[0, i]
+                    attn.v_cache = self.dp_kv_cache[1, i]
 
     def prepare_block_tables(self, seqs: list[Sequence]):
         max_len = max(len(seq.block_table) for seq in seqs) # 将每个seq的block table填充成一样的形状
