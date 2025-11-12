@@ -211,28 +211,44 @@ class Qwen3Model(nn.Module):
     ) -> torch.Tensor:
         hidden_states = self.embed_tokens(input_ids)
         residual = None
+        import torch.cuda.nvtx as nvtx
+        
         if not self.local_dp_enabled:
             for layer in self.layers:
                 hidden_states, residual = layer(positions, hidden_states, residual)
             hidden_states, _ = self.norm(hidden_states, residual)
             return hidden_states
+        
         start = self.local_dp_start
         end = self.local_dp_end
+        
+        # 前面的层
+        
         for i in range(start):
+            nvtx.range_push("pre_parallel_layers")
             hidden_states, residual = self.layers[i](positions, hidden_states, residual)
+            nvtx.range_pop()
+        
         ctx = get_context()
         dev0 = hidden_states.device
+        
+        # 创建两个 CUDA stream
+        stream0 = torch.cuda.Stream(device=dev0)
+        stream1 = torch.cuda.Stream(device=self._dp_target_device)
+        
         if ctx.is_prefill:
+            nvtx.range_push("prefill_data_prepare")
             B = ctx.cu_seqlens_q.numel() - 1
             mid = B // 2
             n0 = ctx.cu_seqlens_q[mid].item()
+            
+            # 分割数据
             pos0, pos1 = positions[:n0], positions[n0:]
             hs0, hs1 = hidden_states[:n0], hidden_states[n0:]
-            if residual is None:
-                res0 = None
-                res1 = None
-            else:
-                res0, res1 = residual[:n0], residual[n0:]
+            res0 = None if residual is None else residual[:n0]
+            res1 = None if residual is None else residual[n0:]
+            
+            # 分割 context
             cuq0 = ctx.cu_seqlens_q[:mid+1] - ctx.cu_seqlens_q[0]
             cuk0 = ctx.cu_seqlens_k[:mid+1] - ctx.cu_seqlens_k[0]
             cuq1 = ctx.cu_seqlens_q[mid:] - ctx.cu_seqlens_q[mid]
@@ -241,67 +257,167 @@ class Qwen3Model(nn.Module):
             sm1 = ctx.slot_mapping[n0:]
             bt0 = ctx.block_tables[:mid] if ctx.block_tables is not None else None
             bt1 = ctx.block_tables[mid:] if ctx.block_tables is not None else None
-            ctx_orig = (ctx.is_prefill, ctx.cu_seqlens_q, ctx.cu_seqlens_k, ctx.max_seqlen_q, ctx.max_seqlen_k, ctx.slot_mapping, ctx.context_lens, ctx.block_tables)
-            # move shard-1 context to dp device to avoid per-layer copies
-            cuq1_d = cuq1.to(self._dp_target_device, non_blocking=True)
-            cuk1_d = cuk1.to(self._dp_target_device, non_blocking=True)
-            sm1_d = sm1.to(self._dp_target_device, non_blocking=True)
-            bt1_d = bt1.to(self._dp_target_device, non_blocking=True) if bt1 is not None else None
-            set_context(True, cuq1_d, cuk1_d, ctx.max_seqlen_q, ctx.max_seqlen_k, sm1_d, None, bt1_d)
-            pos1_d = pos1.to(self._dp_target_device, non_blocking=True)
-            hs1_d = hs1.to(self._dp_target_device, non_blocking=True)
-            res1_d = None if res1 is None else res1.to(self._dp_target_device, non_blocking=True)
-            for j in range(start, end):
-                hs1_d, res1_d = self.dp_layers[j - start](pos1_d, hs1_d, res1_d)
-            set_context(True, cuq0, cuk0, ctx.max_seqlen_q, ctx.max_seqlen_k, sm0, None, bt0)
-            hs0_d, res0_d = hs0, res0
-            for j in range(start, end):
-                hs0_d, res0_d = self.layers[j](pos0, hs0_d, res0_d)
-            hs = torch.cat([hs0_d, hs1_d.to(dev0, non_blocking=True)], dim=0)
-            res = None if res0_d is None else torch.cat([res0_d, res1_d.to(dev0, non_blocking=True)], dim=0)
-            is_prefill, cuq, cuk, msq, msk, sm, cl, bt = ctx_orig
-            set_context(is_prefill, cuq, cuk, msq, msk, sm, cl, bt)
-            hidden_states, residual = hs, res
-        else:
+            
+            ctx_orig = (ctx.is_prefill, ctx.cu_seqlens_q, ctx.cu_seqlens_k, 
+                        ctx.max_seqlen_q, ctx.max_seqlen_k, ctx.slot_mapping, 
+                        ctx.context_lens, ctx.block_tables)
+            nvtx.range_pop()
+            
+            nvtx.range_push("prefill_parallel_execution")
+            
+            # Stream 0: 处理 shard 0 (原始 layers)
+            with torch.cuda.stream(stream0):
+                nvtx.range_push("stream0_prefill_shard0")
+                nvtx.range_push("stream0_set_context")
+                set_context(True, cuq0, cuk0, ctx.max_seqlen_q, ctx.max_seqlen_k, sm0, None, bt0)
+                nvtx.range_pop()
+                
+                hs0_d, res0_d = hs0, res0
+                for j in range(start, end):
+                    nvtx.range_push(f"stream0_dp_layer_{j}")
+                    hs0_d, res0_d = self.layers[j](pos0, hs0_d, res0_d)
+                    nvtx.range_pop()
+                nvtx.range_pop()  # stream0_prefill_shard0
+            
+            # Stream 1: 处理 shard 1 (dp_layers) 
+            with torch.cuda.stream(stream1):
+                nvtx.range_push("stream1_prefill_shard1")
+                
+                nvtx.range_push("stream1_h2d_transfer")
+                # 数据传输到 dp device
+                cuq1_d = cuq1.to(self._dp_target_device, non_blocking=True)
+                cuk1_d = cuk1.to(self._dp_target_device, non_blocking=True)
+                sm1_d = sm1.to(self._dp_target_device, non_blocking=True)
+                bt1_d = bt1.to(self._dp_target_device, non_blocking=True) if bt1 is not None else None
+                pos1_d = pos1.to(self._dp_target_device, non_blocking=True)
+                hs1_d = hs1.to(self._dp_target_device, non_blocking=True)
+                res1_d = None if res1 is None else res1.to(self._dp_target_device, non_blocking=True)
+                nvtx.range_pop()
+                
+                nvtx.range_push("stream1_set_context")
+                set_context(True, cuq1_d, cuk1_d, ctx.max_seqlen_q, ctx.max_seqlen_k, sm1_d, None, bt1_d)
+                nvtx.range_pop()
+                
+                for j in range(start, end):
+                    nvtx.range_push(f"stream1_dp_layer_{j}")
+                    hs1_d, res1_d = self.dp_layers[j - start](pos1_d, hs1_d, res1_d)
+                    nvtx.range_pop()
+                nvtx.range_pop()  # stream1_prefill_shard1
+            
+            # 等待两个 stream 完成
+            nvtx.range_push("wait_streams_sync")
+            stream0.synchronize()
+            stream1.synchronize()
+            nvtx.range_pop()
+            
+            # 合并结果
+            nvtx.range_push("merge_results_d2h")
+            hs1_back = hs1_d.to(dev0, non_blocking=False)
+            res1_back = None if res1_d is None else res1_d.to(dev0, non_blocking=False)
+            
+            hidden_states = torch.cat([hs0_d, hs1_back], dim=0)
+            residual = None if res0_d is None else torch.cat([res0_d, res1_back], dim=0)
+            nvtx.range_pop()
+            
+            # 恢复 context
+            nvtx.range_push("restore_context")
+            set_context(*ctx_orig)
+            nvtx.range_pop()
+            
+            nvtx.range_pop()  # prefill_parallel_execution
+            
+        else:  # decode 阶段
+            nvtx.range_push("decode_data_prepare")
             B = positions.size(0)
             mid = B // 2
+            
             pos0, pos1 = positions[:mid], positions[mid:]
             hs0, hs1 = hidden_states[:mid], hidden_states[mid:]
-            if residual is None:
-                res0 = None
-                res1 = None
-            else:
-                res0, res1 = residual[:mid], residual[mid:]
+            res0 = None if residual is None else residual[:mid]
+            res1 = None if residual is None else residual[mid:]
+            
             sm0 = ctx.slot_mapping[:mid]
             sm1 = ctx.slot_mapping[mid:]
             cl0 = ctx.context_lens[:mid]
             cl1 = ctx.context_lens[mid:]
             bt0 = ctx.block_tables[:mid] if ctx.block_tables is not None else None
             bt1 = ctx.block_tables[mid:] if ctx.block_tables is not None else None
-            ctx_orig = (ctx.is_prefill, None, None, 0, 0, ctx.slot_mapping, ctx.context_lens, ctx.block_tables)
-            # move shard-1 context to dp device to avoid per-layer copies
-            sm1_d = sm1.to(self._dp_target_device, non_blocking=True)
-            cl1_d = cl1.to(self._dp_target_device, non_blocking=True)
-            bt1_d = bt1.to(self._dp_target_device, non_blocking=True) if bt1 is not None else None
-            set_context(False, slot_mapping=sm1_d, context_lens=cl1_d, block_tables=bt1_d)
-            pos1_d = pos1.to(self._dp_target_device, non_blocking=True)
-            hs1_d = hs1.to(self._dp_target_device, non_blocking=True)
-            res1_d = None if res1 is None else res1.to(self._dp_target_device, non_blocking=True)
-            for j in range(start, end):
-                hs1_d, res1_d = self.dp_layers[j - start](pos1_d, hs1_d, res1_d)
-            set_context(False, slot_mapping=sm0, context_lens=cl0, block_tables=bt0)
-            hs0_d, res0_d = hs0, res0
-            for j in range(start, end):
-                hs0_d, res0_d = self.layers[j](pos0, hs0_d, res0_d)
-            hs = torch.cat([hs0_d, hs1_d.to(dev0, non_blocking=True)], dim=0)
-            res = None if res0_d is None else torch.cat([res0_d, res1_d.to(dev0, non_blocking=True)], dim=0)
-            is_prefill, cuq, cuk, msq, msk, sm, cl, bt = ctx_orig
-            set_context(is_prefill, cuq, cuk, msq, msk, sm, cl, bt)
-            hidden_states, residual = hs, res
+            
+            ctx_orig = (ctx.is_prefill, None, None, 0, 0, ctx.slot_mapping, 
+                        ctx.context_lens, ctx.block_tables)
+            nvtx.range_pop()
+            
+            nvtx.range_push("decode_parallel_execution")
+            
+            # Stream 0
+            with torch.cuda.stream(stream0):
+                nvtx.range_push("stream0_decode_shard0")
+                nvtx.range_push("stream0_set_context")
+                set_context(False, slot_mapping=sm0, context_lens=cl0, block_tables=bt0)
+                nvtx.range_pop()
+                
+                hs0_d, res0_d = hs0, res0
+                for j in range(start, end):
+                    nvtx.range_push(f"stream0_layer_{j}")
+                    hs0_d, res0_d = self.layers[j](pos0, hs0_d, res0_d)
+                    nvtx.range_pop()
+                nvtx.range_pop()  # stream0_decode_shard0
+            
+            # Stream 1
+            with torch.cuda.stream(stream1):
+                nvtx.range_push("stream1_decode_shard1")
+                
+                nvtx.range_push("stream1_h2d_transfer")
+                sm1_d = sm1.to(self._dp_target_device, non_blocking=True)
+                cl1_d = cl1.to(self._dp_target_device, non_blocking=True)
+                bt1_d = bt1.to(self._dp_target_device, non_blocking=True) if bt1 is not None else None
+                pos1_d = pos1.to(self._dp_target_device, non_blocking=True)
+                hs1_d = hs1.to(self._dp_target_device, non_blocking=True)
+                res1_d = None if res1 is None else res1.to(self._dp_target_device, non_blocking=True)
+                nvtx.range_pop()
+                
+                nvtx.range_push("stream1_set_context")
+                set_context(False, slot_mapping=sm1_d, context_lens=cl1_d, block_tables=bt1_d)
+                nvtx.range_pop()
+                
+                for j in range(start, end):
+                    nvtx.range_push(f"stream1_dp_layer_{j}")
+                    hs1_d, res1_d = self.dp_layers[j - start](pos1_d, hs1_d, res1_d)
+                    nvtx.range_pop()
+                nvtx.range_pop()  # stream1_decode_shard1
+            
+            nvtx.range_push("wait_streams_sync")
+            stream0.synchronize()
+            stream1.synchronize()
+            nvtx.range_pop()
+            
+            nvtx.range_push("merge_results_d2h")
+            hs1_back = hs1_d.to(dev0, non_blocking=False)
+            res1_back = None if res1_d is None else res1_d.to(dev0, non_blocking=False)
+            
+            hidden_states = torch.cat([hs0_d, hs1_back], dim=0)
+            residual = None if res0_d is None else torch.cat([res0_d, res1_back], dim=0)
+            nvtx.range_pop()
+            
+            nvtx.range_push("restore_context")
+            set_context(*ctx_orig)
+            nvtx.range_pop()
+            
+            nvtx.range_pop()  # decode_parallel_execution
+        
+        # 后面的层
+        
         for i in range(end, len(self.layers)):
+            nvtx.range_push("post_parallel_layers")
             hidden_states, residual = self.layers[i](positions, hidden_states, residual)
+            nvtx.range_pop()
+        
+        nvtx.range_push("final_norm")
         hidden_states, _ = self.norm(hidden_states, residual)
+        nvtx.range_pop()
+        
         return hidden_states
+
         
     
 @register_model("qwen3") 

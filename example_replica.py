@@ -12,7 +12,7 @@ def main():
         gpu_memory_utilization=0.9,
         # Local DP（连续层副本）
         local_dp_start_layer=9,    # 第10层（含）
-        local_dp_end_layer=30,     # 第20层（不含）
+        local_dp_end_layer=20,     # 第20层（不含）
         local_dp_device=1          # 复制到 GPU1
     )
 
@@ -38,15 +38,15 @@ def main():
     from HBserve.utils.loader import load_longbench_prompts
     jsonl_file = "/home/admin/workspace/aop_lab/app_source/data/longbench/2wikimqa_e.jsonl"
     prompts = load_longbench_prompts(jsonl_file, max_samples=10)  
-    # prompts = [
-    #     tokenizer.apply_chat_template(
-    #         [{"role": "user", "content": prompt}],
-    #         tokenize=False,
-    #         add_generation_prompt=True,
-    #         enable_thinking=True
-    #     )
-    #     for prompt in prompts
-    # ]
+    prompts = [
+        tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True
+        )
+        for prompt in prompts
+    ]
     import time
     t1 = time.time()
     outputs = llm.generate(prompts, sampling_params)
