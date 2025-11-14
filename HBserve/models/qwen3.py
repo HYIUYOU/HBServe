@@ -82,6 +82,11 @@ class Qwen3Attention(nn.Module):
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
+        # ===== 添加空张量检查 =====
+        if hidden_states.size(0) == 0:
+            # 返回正确形状的空张量
+            return torch.empty_like(hidden_states)
+        # ==========================
         qkv = self.qkv_proj(hidden_states) # 注意这里的hidden_states 不包含prefix caching命中的部分
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1) # q，k，v都不包含prefix caching命中的部分
         q_by_head = q.view(-1, self.num_heads, self.head_dim)
@@ -167,271 +172,6 @@ class Qwen3DecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states)
         return hidden_states, residual
 
-# ===== None CUDA Graph =====
-# class Qwen3Model(nn.Module):
-
-#     def __init__(
-#         self,
-#         config: Qwen3Config,
-#     ) -> None:
-#         super().__init__()
-#         self.embed_tokens = VocabParallelEmbedding(config.vocab_size, config.hidden_size)
-#         self.layers = nn.ModuleList([Qwen3DecoderLayer(config) for _ in range(config.num_hidden_layers)])
-#         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-#         self.local_dp_start = getattr(config, "local_dp_start_layer", None)
-#         self.local_dp_end = getattr(config, "local_dp_end_layer", None)
-#         self.local_dp_device = getattr(config, "local_dp_device", None)
-#         self.local_dp_enabled = (
-#             self.local_dp_start is not None and
-#             self.local_dp_end is not None and
-#             self.local_dp_device is not None and
-#             0 <= self.local_dp_start < self.local_dp_end <= len(self.layers)
-#         )
-#         if self.local_dp_enabled:
-#             target_device = self.local_dp_device
-#             if isinstance(target_device, int):
-#                 target_device = f"cuda:{target_device}"
-#             self._dp_target_device = torch.device(target_device)
-#             dp_layers = []
-#             for i in range(self.local_dp_start, self.local_dp_end):
-#                 replica = copy.deepcopy(self.layers[i]).to(self._dp_target_device)
-#                 for m in replica.modules():
-#                     if hasattr(m, "k_cache") and hasattr(m, "v_cache"):
-#                         setattr(m, "is_replica", True)
-#                         setattr(m, "replica_device", self._dp_target_device)
-#                 dp_layers.append(replica)
-#             self.dp_layers = nn.ModuleList(dp_layers)
-#         else:
-#             self.dp_layers = None
-
-#     def forward(
-#         self,
-#         input_ids: torch.Tensor,
-#         positions: torch.Tensor,
-#     ) -> torch.Tensor:
-#         hidden_states = self.embed_tokens(input_ids)
-#         residual = None
-#         import torch.cuda.nvtx as nvtx
-        
-#         if not self.local_dp_enabled:
-#             for layer in self.layers:
-#                 hidden_states, residual = layer(positions, hidden_states, residual)
-#             hidden_states, _ = self.norm(hidden_states, residual)
-#             return hidden_states
-        
-#         start = self.local_dp_start
-#         end = self.local_dp_end
-        
-#         # 前面的层
-#         for i in range(start):
-#             nvtx.range_push(f"pre_layer_{i}")
-#             hidden_states, residual = self.layers[i](positions, hidden_states, residual)
-#             nvtx.range_pop()
-        
-#         ctx = get_context()
-#         dev0 = hidden_states.device
-        
-#         # 创建两个 CUDA stream
-#         stream0 = torch.cuda.Stream(device=dev0)
-#         stream1 = torch.cuda.Stream(device=self._dp_target_device)
-        
-#         if ctx.is_prefill:
-#             nvtx.range_push("prefill_data_prepare")
-#             B = ctx.cu_seqlens_q.numel() - 1
-#             mid = B // 2
-#             n0 = ctx.cu_seqlens_q[mid].item()
-            
-#             # 分割数据
-#             pos0, pos1 = positions[:n0], positions[n0:]
-#             hs0, hs1 = hidden_states[:n0], hidden_states[n0:]
-#             res0 = None if residual is None else residual[:n0]
-#             res1 = None if residual is None else residual[n0:]
-            
-#             # 分割 context
-#             cuq0 = ctx.cu_seqlens_q[:mid+1] - ctx.cu_seqlens_q[0]
-#             cuk0 = ctx.cu_seqlens_k[:mid+1] - ctx.cu_seqlens_k[0]
-#             cuq1 = ctx.cu_seqlens_q[mid:] - ctx.cu_seqlens_q[mid]
-#             cuk1 = ctx.cu_seqlens_k[mid:] - ctx.cu_seqlens_k[mid]
-#             sm0 = ctx.slot_mapping[:n0]
-#             sm1 = ctx.slot_mapping[n0:]
-#             bt0 = ctx.block_tables[:mid] if ctx.block_tables is not None else None
-#             bt1 = ctx.block_tables[mid:] if ctx.block_tables is not None else None
-            
-#             ctx_orig = (ctx.is_prefill, ctx.cu_seqlens_q, ctx.cu_seqlens_k, 
-#                         ctx.max_seqlen_q, ctx.max_seqlen_k, ctx.slot_mapping, 
-#                         ctx.context_lens, ctx.block_tables)
-#             nvtx.range_pop()
-            
-#             nvtx.range_push("prefill_parallel_execution")
-            
-#             # 在 default stream 记录开始事件
-#             start_event = torch.cuda.Event()
-#             start_event.record(torch.cuda.current_stream(dev0))
-            
-#             # Stream 0: 处理 shard 0 (原始 layers) on dev0
-#             with torch.cuda.stream(stream0):
-#                 # 等待之前的操作完成
-#                 stream0.wait_event(start_event)
-                
-#                 torch.cuda.nvtx.range_push("stream0_shard0_total")
-#                 set_context(True, cuq0, cuk0, ctx.max_seqlen_q, ctx.max_seqlen_k, sm0, None, bt0)
-                
-#                 hs0_d, res0_d = hs0, res0
-#                 for j in range(start, end):
-#                     torch.cuda.nvtx.range_push(f"stream0_layer_{j}")
-#                     hs0_d, res0_d = self.layers[j](pos0, hs0_d, res0_d)
-#                     torch.cuda.nvtx.range_pop()
-                
-#                 torch.cuda.nvtx.range_pop()  # stream0_shard0_total
-            
-#             # Stream 1: 处理 shard 1 (dp_layers) on dp_device
-#             with torch.cuda.stream(stream1):
-#                 # 等待之前的操作完成
-#                 stream1.wait_event(start_event)
-                
-#                 torch.cuda.nvtx.range_push("stream1_shard1_total")
-                
-#                 # GPU-to-GPU 传输 (通过 NVLink)
-#                 torch.cuda.nvtx.range_push("stream1_p2p_transfer")
-#                 cuq1_d = cuq1.to(self._dp_target_device, non_blocking=True)
-#                 cuk1_d = cuk1.to(self._dp_target_device, non_blocking=True)
-#                 sm1_d = sm1.to(self._dp_target_device, non_blocking=True)
-#                 bt1_d = bt1.to(self._dp_target_device, non_blocking=True) if bt1 is not None else None
-#                 pos1_d = pos1.to(self._dp_target_device, non_blocking=True)
-#                 hs1_d = hs1.to(self._dp_target_device, non_blocking=True)
-#                 res1_d = None if res1 is None else res1.to(self._dp_target_device, non_blocking=True)
-#                 torch.cuda.nvtx.range_pop()
-                
-#                 set_context(True, cuq1_d, cuk1_d, ctx.max_seqlen_q, ctx.max_seqlen_k, sm1_d, None, bt1_d)
-                
-#                 for j in range(start, end):
-#                     torch.cuda.nvtx.range_push(f"stream1_dp_layer_{j}")
-#                     hs1_d, res1_d = self.dp_layers[j - start](pos1_d, hs1_d, res1_d)
-#                     torch.cuda.nvtx.range_pop()
-                
-#                 # *** 关键优化：在 stream1 内部就开始 P2P 传回 ***
-#                 torch.cuda.nvtx.range_push("stream1_p2p_transfer_back")
-#                 hs1_back = hs1_d.to(dev0, non_blocking=True)
-#                 res1_back = None if res1_d is None else res1_d.to(dev0, non_blocking=True)
-#                 torch.cuda.nvtx.range_pop()
-                
-#                 torch.cuda.nvtx.range_pop()  # stream1_shard1_total
-            
-#             # 等待两个 stream 完成（包括 P2P 传输）
-#             nvtx.range_push("wait_both_streams")
-#             stream0.synchronize()
-#             stream1.synchronize()
-#             nvtx.range_pop()
-            
-#             # 合并结果（此时数据已经在 dev0）
-#             nvtx.range_push("merge_results")
-#             hidden_states = torch.cat([hs0_d, hs1_back], dim=0)
-#             residual = None if res0_d is None else torch.cat([res0_d, res1_back], dim=0)
-#             nvtx.range_pop()
-            
-#             # 恢复 context
-#             set_context(*ctx_orig)
-            
-#             nvtx.range_pop()  # prefill_parallel_execution
-            
-#         else:  # decode 阶段
-#             nvtx.range_push("decode_data_prepare")
-#             B = positions.size(0)
-#             mid = B // 2
-            
-#             pos0, pos1 = positions[:mid], positions[mid:]
-#             hs0, hs1 = hidden_states[:mid], hidden_states[mid:]
-#             res0 = None if residual is None else residual[:mid]
-#             res1 = None if residual is None else residual[mid:]
-            
-#             sm0 = ctx.slot_mapping[:mid]
-#             sm1 = ctx.slot_mapping[mid:]
-#             cl0 = ctx.context_lens[:mid]
-#             cl1 = ctx.context_lens[mid:]
-#             bt0 = ctx.block_tables[:mid] if ctx.block_tables is not None else None
-#             bt1 = ctx.block_tables[mid:] if ctx.block_tables is not None else None
-            
-#             ctx_orig = (ctx.is_prefill, None, None, 0, 0, ctx.slot_mapping, 
-#                         ctx.context_lens, ctx.block_tables)
-#             nvtx.range_pop()
-            
-#             nvtx.range_push("decode_parallel_execution")
-            
-#             start_event = torch.cuda.Event()
-#             start_event.record(torch.cuda.current_stream(dev0))
-            
-#             # Stream 0
-#             with torch.cuda.stream(stream0):
-#                 stream0.wait_event(start_event)
-                
-#                 torch.cuda.nvtx.range_push("stream0_shard0_total")
-#                 set_context(False, slot_mapping=sm0, context_lens=cl0, block_tables=bt0)
-                
-#                 hs0_d, res0_d = hs0, res0
-#                 for j in range(start, end):
-#                     torch.cuda.nvtx.range_push(f"stream0_layer_{j}")
-#                     hs0_d, res0_d = self.layers[j](pos0, hs0_d, res0_d)
-#                     torch.cuda.nvtx.range_pop()
-                
-#                 torch.cuda.nvtx.range_pop()
-            
-#             # Stream 1
-#             with torch.cuda.stream(stream1):
-#                 stream1.wait_event(start_event)
-                
-#                 torch.cuda.nvtx.range_push("stream1_shard1_total")
-                
-#                 torch.cuda.nvtx.range_push("stream1_p2p_transfer")
-#                 sm1_d = sm1.to(self._dp_target_device, non_blocking=True)
-#                 cl1_d = cl1.to(self._dp_target_device, non_blocking=True)
-#                 bt1_d = bt1.to(self._dp_target_device, non_blocking=True) if bt1 is not None else None
-#                 pos1_d = pos1.to(self._dp_target_device, non_blocking=True)
-#                 hs1_d = hs1.to(self._dp_target_device, non_blocking=True)
-#                 res1_d = None if res1 is None else res1.to(self._dp_target_device, non_blocking=True)
-#                 torch.cuda.nvtx.range_pop()
-                
-#                 set_context(False, slot_mapping=sm1_d, context_lens=cl1_d, block_tables=bt1_d)
-                
-#                 for j in range(start, end):
-#                     torch.cuda.nvtx.range_push(f"stream1_dp_layer_{j}")
-#                     hs1_d, res1_d = self.dp_layers[j - start](pos1_d, hs1_d, res1_d)
-#                     torch.cuda.nvtx.range_pop()
-                
-#                 # 在 stream1 内部传回
-#                 torch.cuda.nvtx.range_push("stream1_p2p_transfer_back")
-#                 hs1_back = hs1_d.to(dev0, non_blocking=True)
-#                 res1_back = None if res1_d is None else res1_d.to(dev0, non_blocking=True)
-#                 torch.cuda.nvtx.range_pop()
-                
-#                 torch.cuda.nvtx.range_pop()
-            
-#             nvtx.range_push("wait_both_streams")
-#             stream0.synchronize()
-#             stream1.synchronize()
-#             nvtx.range_pop()
-            
-#             nvtx.range_push("merge_results")
-#             hidden_states = torch.cat([hs0_d, hs1_back], dim=0)
-#             residual = None if res0_d is None else torch.cat([res0_d, res1_back], dim=0)
-#             nvtx.range_pop()
-            
-#             set_context(*ctx_orig)
-            
-#             nvtx.range_pop()  # decode_parallel_execution
-        
-#         # 后面的层
-#         for i in range(end, len(self.layers)):
-#             nvtx.range_push(f"post_layer_{i}")
-#             hidden_states, residual = self.layers[i](positions, hidden_states, residual)
-#             nvtx.range_pop()
-        
-#         nvtx.range_push("final_norm")
-#         hidden_states, _ = self.norm(hidden_states, residual)
-#         nvtx.range_pop()
-        
-#         return hidden_states
-
-
 # ==== CUDA Graph ====
 class Qwen3Model(nn.Module):
 
@@ -484,7 +224,11 @@ class Qwen3Model(nn.Module):
     def _capture_decode_graph(self, B, positions, hidden_states, residual, ctx):
         """捕获 decode 阶段的 CUDA Graph"""
         import torch.cuda.nvtx as nvtx
-        
+        # ===== 添加检查 =====
+        if B < 2:
+            print(f"Batch size {B} too small for graph capture, need at least 2")
+            return None
+        # ====================
         start = self.local_dp_start
         end = self.local_dp_end
         mid = B // 2
@@ -503,7 +247,8 @@ class Qwen3Model(nn.Module):
         
         # 获取最大 block 表大小并创建固定大小的 buffer
         if ctx.block_tables is not None:
-            max_blocks = ctx.block_tables.shape[1]
+            cur_max_blocks = ctx.block_tables.shape[1]
+            max_blocks = int(cur_max_blocks * 10)
             # 创建固定大小的 block_tables buffer
             bt0 = torch.zeros((mid, max_blocks), dtype=ctx.block_tables.dtype, device=ctx.block_tables.device)
             bt1 = torch.zeros((B - mid, max_blocks), dtype=ctx.block_tables.dtype, device=ctx.block_tables.device)
@@ -636,6 +381,35 @@ class Qwen3Model(nn.Module):
         if ctx.is_prefill:
             nvtx.range_push("prefill_data_prepare")
             B = ctx.cu_seqlens_q.numel() - 1
+
+            # ===== 添加空batch检查 =====
+            if B == 0:
+                nvtx.range_pop()
+                # 跳过 replica 处理，直接执行后续层
+                for i in range(end, len(self.layers)):
+                    hidden_states, residual = self.layers[i](positions, hidden_states, residual)
+                hidden_states, _ = self.norm(hidden_states, residual)
+                return hidden_states
+            # ==========================
+            
+            # ===== 确保 mid 不会导致空shard =====
+            mid = max(1, min(B - 1, B // 2))  # 确保 mid 在 [1, B-1] 范围内
+            # ====================================
+            
+            n0 = ctx.cu_seqlens_q[mid].item()
+            
+            # ===== 添加token数检查 =====
+            if n0 == 0 or n0 == positions.size(0):
+                # 如果分割导致某一边为空，退化为单路执行
+                nvtx.range_pop()
+                for j in range(start, end):
+                    hidden_states, residual = self.layers[j](positions, hidden_states, residual)
+                for i in range(end, len(self.layers)):
+                    hidden_states, residual = self.layers[i](positions, hidden_states, residual)
+                hidden_states, _ = self.norm(hidden_states, residual)
+                return hidden_states
+            # ==========================
+
             mid = B // 2
             n0 = ctx.cu_seqlens_q[mid].item()
             
@@ -726,8 +500,28 @@ class Qwen3Model(nn.Module):
             
         else:  # decode 阶段 - 使用 CUDA Graph
             B = positions.size(0)
-            mid = B // 2
+            # mid = B // 2
+            # ===== 添加空batch检查 =====
+            if B == 0:
+                # 空batch，直接返回
+                for i in range(end, len(self.layers)):
+                    hidden_states, residual = self.layers[i](positions, hidden_states, residual)
+                hidden_states, _ = self.norm(hidden_states, residual)
+                return hidden_states
+            # ==========================
             
+            # ===== 确保 mid 不会导致空shard =====
+            if B == 1:
+                # 只有1个样本，不分割
+                for j in range(start, end):
+                    hidden_states, residual = self.layers[j](positions, hidden_states, residual)
+                for i in range(end, len(self.layers)):
+                    hidden_states, residual = self.layers[i](positions, hidden_states, residual)
+                hidden_states, _ = self.norm(hidden_states, residual)
+                return hidden_states
+            
+            mid = max(1, min(B - 1, B // 2))  # 确保 mid 在 [1, B-1] 范围内
+            # ====================================
             if self.use_cuda_graph:
                 nvtx.range_push("decode_graph_execution")
                 
