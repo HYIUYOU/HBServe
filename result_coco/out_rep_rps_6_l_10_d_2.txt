@@ -1,0 +1,16 @@
+`torch_dtype` is deprecated! Use `dtype` instead!
+✓ 检测到模型类型: qwen3
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/example_replica.py", line 82, in <module>
+[rank0]:     main()
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/example_replica.py", line 28, in main
+[rank0]:     llm = LLM(
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/llm_engine.py", line 36, in __init__
+[rank0]:     self.model_runner = ModelRunner(config, 0, self.events) # rank0,主进程
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/engine/model_runner.py", line 34, in __init__
+[rank0]:     load_model(self.model, config.model)
+[rank0]:   File "/home/admin/workspace/aop_lab/app_source/HBServe/HBserve/utils/loader.py", line 15, in load_model
+[rank0]:     with safe_open(file, "pt", "cpu") as f:
+[rank0]:   File "/home/admin/miniconda3/envs/coco/lib/python3.10/site-packages/torch/storage.py", line 404, in untyped
+[rank0]:     def untyped(self):
+[rank0]: KeyboardInterrupt

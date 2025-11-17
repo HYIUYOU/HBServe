@@ -32,18 +32,12 @@ class ModelRunner:
         # self.model = Qwen3ForCausalLM(hf_config)
         self.model = create_model_from_config(hf_config)
         load_model(self.model, config.model)
-        # 修复：正确遍历每个设备和每层进行权重加载
         if getattr(self.model, "local_dp_enabled", False):
             core = getattr(self.model, "model", None)
-            if core is not None and hasattr(core, "dp_layers") and core.dp_layers is not None:
-                # 遍历每个DP设备
-                for device_idx, device_layers in enumerate(core.dp_layers):
-                    # 遍历该设备上的每个层副本
-                    for layer_offset, layer in enumerate(device_layers):
-                        original_layer_idx = core.local_dp_start + layer_offset
-                        # 从原始层加载权重到副本层
-                        layer.load_state_dict(core.layers[original_layer_idx].state_dict(), strict=True)
-                        print(f"[Rank{self.rank}] Copied layer {original_layer_idx} weights to DP device {device_idx}")
+            if core is not None and getattr(core, "dp_layers", None):
+                s = core.local_dp_start
+                for i in range(core.local_dp_start, core.local_dp_end):
+                    core.dp_layers[i - s].load_state_dict(core.layers[i].state_dict(), strict=True)
         self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()
@@ -125,40 +119,31 @@ class ModelRunner:
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
         assert config.num_kvcache_blocks > 0
         self.kv_cache = torch.zeros(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, hf_config.head_dim)
-        # 为主模型分配KV Cache
         layer_id = 0
         for module in self.model.modules():
             if hasattr(module, "k_cache") and hasattr(module, "v_cache") and not getattr(module, "is_replica", False):
                 module.k_cache = self.kv_cache[0, layer_id]
                 module.v_cache = self.kv_cache[1, layer_id]
                 layer_id += 1
-        
-        # ===== 修改：为多DP设备分配KV Cache =====
         core = getattr(self.model, "model", None)
-        if core is not None and getattr(core, "dp_layers", None) and core.local_dp_enabled:
-            # 为每个DP设备独立分配KV Cache
-            core.dp_kv_cache = []
-            num_kv_heads = hf_config.num_key_value_heads // self.world_size
-            
-            for idx, (device_layers, target_device) in enumerate(zip(core.dp_layers, core._dp_target_devices)):
-                dp_num = len(device_layers)
-                dp_cache = torch.zeros(
+        if core is not None and getattr(core, "dp_layers", None):
+            dp_layers = core.dp_layers
+            dp_num = len(dp_layers)
+            if dp_num:
+                dp_device = core._dp_target_device
+                self.dp_kv_cache = torch.zeros(
                     2,
                     dp_num,
                     config.num_kvcache_blocks,
                     self.block_size,
                     num_kv_heads,
                     hf_config.head_dim,
-                    device=target_device,
+                    device=dp_device,
                 )
-                core.dp_kv_cache.append(dp_cache)
-                
-                # 分配给对应layers
-                for i, layer in enumerate(device_layers):
+                for i, layer in enumerate(dp_layers):
                     attn = layer.self_attn.attn
-                    attn.k_cache = dp_cache[0, i]
-                    attn.v_cache = dp_cache[1, i]
-        # ==========================================
+                    attn.k_cache = self.dp_kv_cache[0, i]
+                    attn.v_cache = self.dp_kv_cache[1, i]
 
     def prepare_block_tables(self, seqs: list[Sequence]):
         max_len = max(len(seq.block_table) for seq in seqs) # 将每个seq的block table填充成一样的形状

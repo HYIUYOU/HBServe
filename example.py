@@ -23,16 +23,17 @@ def main():
     ]*200
     from HBserve.utils.loader import load_longbench_prompts
     jsonl_file = "/home/admin/workspace/aop_lab/app_source/data/longbench/2wikimqa_e.jsonl"
-    prompts = load_longbench_prompts(jsonl_file, max_samples=args.max_samples)  
-    # prompts = [
-    #     tokenizer.apply_chat_template(
-    #         [{"role": "user", "content": prompt}],
-    #         tokenize=False,
-    #         add_generation_prompt=True,
-    #         enable_thinking=True
-    #     )
-    #     for prompt in prompts
-    # ]
+    prompts = load_longbench_prompts(jsonl_file, max_samples=args.max_samples, tokenizer = tokenizer, max_length = 1024)  
+    prompts = [
+        tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True
+        )
+        for prompt in prompts
+    ]
+    # print("prompts:",prompts)
     import time
     t1 = time.time()
     outputs = llm.generate(prompts, sampling_params)

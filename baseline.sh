@@ -6,7 +6,7 @@
 for samples in $(seq 3 1 30)
 do
     echo "Running with max_samples=$samples"
-    python example.py --max_samples $samples &> result/out_baseline_rps_${samples}.txt
+    python example.py --max_samples $samples &> res_long/out_baseline_rps_${samples}.txt
     echo "Completed max_samples=$samples"
 done
 
