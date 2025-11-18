@@ -1,0 +1,158 @@
+`torch_dtype` is deprecated! Use `dtype` instead!
+✓ 检测到模型类型: qwen3
+[Rank0] Copied layer 10 weights to DP device 0
+[Rank0] Copied layer 11 weights to DP device 0
+[Rank0] Copied layer 12 weights to DP device 0
+[Rank0] Copied layer 13 weights to DP device 0
+[Rank0] Copied layer 14 weights to DP device 0
+[Rank0] Copied layer 15 weights to DP device 0
+[Rank0] Copied layer 16 weights to DP device 0
+[Rank0] Copied layer 17 weights to DP device 0
+[Rank0] Copied layer 18 weights to DP device 0
+[Rank0] Copied layer 19 weights to DP device 0
+[Rank0] Copied layer 20 weights to DP device 0
+[Rank0] Copied layer 21 weights to DP device 0
+[Rank0] Copied layer 22 weights to DP device 0
+[Rank0] Copied layer 23 weights to DP device 0
+[Rank0] Copied layer 24 weights to DP device 0
+[Rank0] Copied layer 25 weights to DP device 0
+[Rank0] Copied layer 26 weights to DP device 0
+[Rank0] Copied layer 27 weights to DP device 0
+[Rank0] Copied layer 28 weights to DP device 0
+[Rank0] Copied layer 29 weights to DP device 0
+[Rank0] Copied layer 30 weights to DP device 0
+[Rank0] Copied layer 31 weights to DP device 0
+[Rank0] Copied layer 32 weights to DP device 0
+[Rank0] Copied layer 33 weights to DP device 0
+[Rank0] Copied layer 34 weights to DP device 0
+[Rank0] Copied layer 35 weights to DP device 0
+[Rank0] Copied layer 36 weights to DP device 0
+[Rank0] Copied layer 37 weights to DP device 0
+[Rank0] Copied layer 38 weights to DP device 0
+[Rank0] Copied layer 39 weights to DP device 0
+[Rank0] Copied layer 40 weights to DP device 0
+[Rank0] Copied layer 41 weights to DP device 0
+[Rank0] Copied layer 42 weights to DP device 0
+[Rank0] Copied layer 43 weights to DP device 0
+[Rank0] Copied layer 44 weights to DP device 0
+[Rank0] Copied layer 45 weights to DP device 0
+[Rank0] Copied layer 46 weights to DP device 0
+[Rank0] Copied layer 47 weights to DP device 0
+[Rank0] Copied layer 48 weights to DP device 0
+[Rank0] Copied layer 49 weights to DP device 0
+[Rank0] Copied layer 50 weights to DP device 0
+[Rank0] Copied layer 51 weights to DP device 0
+[Rank0] Copied layer 52 weights to DP device 0
+[Rank0] Copied layer 53 weights to DP device 0
+[Rank0] Copied layer 54 weights to DP device 0
+[Rank0] Copied layer 55 weights to DP device 0
+[Rank0] Copied layer 56 weights to DP device 0
+[Rank0] Copied layer 57 weights to DP device 0
+[Rank0] Copied layer 58 weights to DP device 0
+[Rank0] Copied layer 59 weights to DP device 0
+[Rank0] Copied layer 10 weights to DP device 1
+[Rank0] Copied layer 11 weights to DP device 1
+[Rank0] Copied layer 12 weights to DP device 1
+[Rank0] Copied layer 13 weights to DP device 1
+[Rank0] Copied layer 14 weights to DP device 1
+[Rank0] Copied layer 15 weights to DP device 1
+[Rank0] Copied layer 16 weights to DP device 1
+[Rank0] Copied layer 17 weights to DP device 1
+[Rank0] Copied layer 18 weights to DP device 1
+[Rank0] Copied layer 19 weights to DP device 1
+[Rank0] Copied layer 20 weights to DP device 1
+[Rank0] Copied layer 21 weights to DP device 1
+[Rank0] Copied layer 22 weights to DP device 1
+[Rank0] Copied layer 23 weights to DP device 1
+[Rank0] Copied layer 24 weights to DP device 1
+[Rank0] Copied layer 25 weights to DP device 1
+[Rank0] Copied layer 26 weights to DP device 1
+[Rank0] Copied layer 27 weights to DP device 1
+[Rank0] Copied layer 28 weights to DP device 1
+[Rank0] Copied layer 29 weights to DP device 1
+[Rank0] Copied layer 30 weights to DP device 1
+[Rank0] Copied layer 31 weights to DP device 1
+[Rank0] Copied layer 32 weights to DP device 1
+[Rank0] Copied layer 33 weights to DP device 1
+[Rank0] Copied layer 34 weights to DP device 1
+[Rank0] Copied layer 35 weights to DP device 1
+[Rank0] Copied layer 36 weights to DP device 1
+[Rank0] Copied layer 37 weights to DP device 1
+[Rank0] Copied layer 38 weights to DP device 1
+[Rank0] Copied layer 39 weights to DP device 1
+[Rank0] Copied layer 40 weights to DP device 1
+[Rank0] Copied layer 41 weights to DP device 1
+[Rank0] Copied layer 42 weights to DP device 1
+[Rank0] Copied layer 43 weights to DP device 1
+[Rank0] Copied layer 44 weights to DP device 1
+[Rank0] Copied layer 45 weights to DP device 1
+[Rank0] Copied layer 46 weights to DP device 1
+[Rank0] Copied layer 47 weights to DP device 1
+[Rank0] Copied layer 48 weights to DP device 1
+[Rank0] Copied layer 49 weights to DP device 1
+[Rank0] Copied layer 50 weights to DP device 1
+[Rank0] Copied layer 51 weights to DP device 1
+[Rank0] Copied layer 52 weights to DP device 1
+[Rank0] Copied layer 53 weights to DP device 1
+[Rank0] Copied layer 54 weights to DP device 1
+[Rank0] Copied layer 55 weights to DP device 1
+[Rank0] Copied layer 56 weights to DP device 1
+[Rank0] Copied layer 57 weights to DP device 1
+[Rank0] Copied layer 58 weights to DP device 1
+[Rank0] Copied layer 59 weights to DP device 1
+[Rank0] Copied layer 10 weights to DP device 2
+[Rank0] Copied layer 11 weights to DP device 2
+[Rank0] Copied layer 12 weights to DP device 2
+[Rank0] Copied layer 13 weights to DP device 2
+[Rank0] Copied layer 14 weights to DP device 2
+[Rank0] Copied layer 15 weights to DP device 2
+[Rank0] Copied layer 16 weights to DP device 2
+[Rank0] Copied layer 17 weights to DP device 2
+[Rank0] Copied layer 18 weights to DP device 2
+[Rank0] Copied layer 19 weights to DP device 2
+[Rank0] Copied layer 20 weights to DP device 2
+[Rank0] Copied layer 21 weights to DP device 2
+[Rank0] Copied layer 22 weights to DP device 2
+[Rank0] Copied layer 23 weights to DP device 2
+[Rank0] Copied layer 24 weights to DP device 2
+[Rank0] Copied layer 25 weights to DP device 2
+[Rank0] Copied layer 26 weights to DP device 2
+[Rank0] Copied layer 27 weights to DP device 2
+[Rank0] Copied layer 28 weights to DP device 2
+[Rank0] Copied layer 29 weights to DP device 2
+[Rank0] Copied layer 30 weights to DP device 2
+[Rank0] Copied layer 31 weights to DP device 2
+[Rank0] Copied layer 32 weights to DP device 2
+[Rank0] Copied layer 33 weights to DP device 2
+[Rank0] Copied layer 34 weights to DP device 2
+[Rank0] Copied layer 35 weights to DP device 2
+[Rank0] Copied layer 36 weights to DP device 2
+[Rank0] Copied layer 37 weights to DP device 2
+[Rank0] Copied layer 38 weights to DP device 2
+[Rank0] Copied layer 39 weights to DP device 2
+[Rank0] Copied layer 40 weights to DP device 2
+[Rank0] Copied layer 41 weights to DP device 2
+[Rank0] Copied layer 42 weights to DP device 2
+[Rank0] Copied layer 43 weights to DP device 2
+[Rank0] Copied layer 44 weights to DP device 2
+[Rank0] Copied layer 45 weights to DP device 2
+[Rank0] Copied layer 46 weights to DP device 2
+[Rank0] Copied layer 47 weights to DP device 2
+[Rank0] Copied layer 48 weights to DP device 2
+[Rank0] Copied layer 49 weights to DP device 2
+[Rank0] Copied layer 50 weights to DP device 2
+[Rank0] Copied layer 51 weights to DP device 2
+[Rank0] Copied layer 52 weights to DP device 2
+[Rank0] Copied layer 53 weights to DP device 2
+[Rank0] Copied layer 54 weights to DP device 2
+[Rank0] Copied layer 55 weights to DP device 2
+[Rank0] Copied layer 56 weights to DP device 2
+[Rank0] Copied layer 57 weights to DP device 2
+[Rank0] Copied layer 58 weights to DP device 2
+[Rank0] Copied layer 59 weights to DP device 2
+Generating:   0%|          | 0/16 [00:00<?, ?it/s]Generating:   0%|          | 0/16 [00:06<?, ?it/s, Prefill=2468tok/s, Decode=0tok/s]Generating:   0%|          | 0/16 [00:17<?, ?it/s, Prefill=2468tok/s, Decode=1tok/s]Generating:   0%|          | 0/16 [00:17<?, ?it/s, Prefill=2468tok/s, Decode=274tok/s]Generating:   0%|          | 0/16 [00:17<?, ?it/s, Prefill=2468tok/s, Decode=287tok/s]Generating:   0%|          | 0/16 [00:17<?, ?it/s, Prefill=2468tok/s, Decode=267tok/s]Generating:   0%|          | 0/16 [00:17<?, ?it/s, Prefill=2468tok/s, Decode=268tok/s]Generating:   0%|          | 0/16 [00:17<?, ?it/s, Prefill=2468tok/s, Decode=283tok/s]Generating:   0%|          | 0/16 [00:17<?, ?it/s, Prefill=2468tok/s, Decode=280tok/s]Generating:   0%|          | 0/16 [00:17<?, ?it/s, Prefill=2468tok/s, Decode=280tok/s]Generating:   0%|          | 0/16 [00:17<?, ?it/s, Prefill=2468tok/s, Decode=280tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=285tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=284tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=280tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=266tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=272tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=283tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=288tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=279tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=282tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=282tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=267tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=267tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=257tok/s]Generating:   0%|          | 0/16 [00:18<?, ?it/s, Prefill=2468tok/s, Decode=275tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=272tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=275tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=276tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=269tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=257tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=253tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=249tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=251tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=263tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=272tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=277tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=276tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=263tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=274tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=274tok/s]Generating:   0%|          | 0/16 [00:19<?, ?it/s, Prefill=2468tok/s, Decode=269tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=269tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=281tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=283tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=283tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=277tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=275tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=278tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=282tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=281tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=283tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=280tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=284tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=290tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=289tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=293tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=289tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=292tok/s]Generating:   0%|          | 0/16 [00:20<?, ?it/s, Prefill=2468tok/s, Decode=290tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=292tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=293tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=288tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=271tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=279tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=267tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=273tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=278tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=284tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=280tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=272tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=267tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=255tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=248tok/s]Generating:   0%|          | 0/16 [00:21<?, ?it/s, Prefill=2468tok/s, Decode=276tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=277tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=246tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=256tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=260tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=266tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=284tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=284tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=277tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=280tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=282tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=280tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=275tok/s]Generating:   0%|          | 0/16 [00:22<?, ?it/s, Prefill=2468tok/s, Decode=278tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=281tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=280tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=283tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=285tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=281tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=274tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=288tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=274tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=259tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=262tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=263tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=266tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=279tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=272tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=267tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=266tok/s]Generating:   0%|          | 0/16 [00:23<?, ?it/s, Prefill=2468tok/s, Decode=274tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=281tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=292tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=275tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=264tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=264tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=274tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=279tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=292tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=292tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=291tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=291tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=290tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=288tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=288tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=289tok/s]Generating:   0%|          | 0/16 [00:24<?, ?it/s, Prefill=2468tok/s, Decode=281tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=275tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=281tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=283tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=281tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=266tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=260tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=269tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=278tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=281tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=276tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=246tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=248tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=266tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=268tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=255tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=274tok/s]Generating:   0%|          | 0/16 [00:25<?, ?it/s, Prefill=2468tok/s, Decode=274tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=275tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=269tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=262tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=261tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=265tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=256tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=254tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=254tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=274tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=287tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=277tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=280tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=282tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=280tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=270tok/s]Generating:   0%|          | 0/16 [00:26<?, ?it/s, Prefill=2468tok/s, Decode=279tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=277tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=278tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=278tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=267tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=281tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=286tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=273tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=269tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=261tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=273tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=268tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=271tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=274tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=267tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=263tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=278tok/s]Generating:   0%|          | 0/16 [00:27<?, ?it/s, Prefill=2468tok/s, Decode=279tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=275tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=257tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=264tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=254tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=247tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=249tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=267tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=252tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=259tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=264tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=279tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=281tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=261tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=271tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=278tok/s]Generating:   0%|          | 0/16 [00:28<?, ?it/s, Prefill=2468tok/s, Decode=282tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=279tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=284tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=282tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=282tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=283tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=284tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=287tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=285tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=290tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=290tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=290tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=289tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=292tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=289tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=282tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=279tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=287tok/s]Generating:   0%|          | 0/16 [00:29<?, ?it/s, Prefill=2468tok/s, Decode=274tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=282tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=273tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=265tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=268tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=258tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=265tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=280tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=279tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=279tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=289tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=287tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=291tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=282tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=283tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=269tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=257tok/s]Generating:   0%|          | 0/16 [00:30<?, ?it/s, Prefill=2468tok/s, Decode=259tok/s]Generating:   0%|          | 0/16 [00:31<?, ?it/s, Prefill=2468tok/s, Decode=267tok/s]Generating:   0%|          | 0/16 [00:31<?, ?it/s, Prefill=2468tok/s, Decode=268tok/s]Generating:   0%|          | 0/16 [00:31<?, ?it/s, Prefill=2468tok/s, Decode=269tok/s]Generating:   0%|          | 0/16 [00:31<?, ?it/s, Prefill=2468tok/s, Decode=272tok/s]Generating:   0%|          | 0/16 [00:31<?, ?it/s, Prefill=2468tok/s, Decode=265tok/s]Generating:   0%|          | 0/16 [00:31<?, ?it/s, Prefill=2468tok/s, Decode=273tok/s]Generating:   0%|          | 0/16 [00:31<?, ?it/s, Prefill=2468tok/s, Decode=276tok/s]Generating:   0%|          | 0/16 [00:31<?, ?it/s, Prefill=2468tok/s, Decode=265tok/s]Generating:   0%|          | 0/16 [00:31<?, ?it/s, Prefill=2468tok/s, Decode=239tok/s]Generating:   0%|          | 0/16 [00:31<?, ?it/s, Prefill=2468tok/s, Decode=256tok/s]Generating:   0%|          | 0/16 [00:31<?, ?it/s, Prefill=2468tok/s, Decode=266tok/s]Generating:   0%|          | 0/16 [00:31<?, ?it/s, Prefill=2468tok/s, Decode=289tok/s]Generating:   6%|▋         | 1/16 [00:31<07:55, 31.70s/it, Prefill=2468tok/s, Decode=289tok/s]Generating:   6%|▋         | 1/16 [00:33<07:55, 31.70s/it, Prefill=2468tok/s, Decode=7tok/s]  Generating:   6%|▋         | 1/16 [00:33<07:55, 31.70s/it, Prefill=2468tok/s, Decode=258tok/s]Generating:   6%|▋         | 1/16 [00:33<07:55, 31.70s/it, Prefill=2468tok/s, Decode=259tok/s]Generating:   6%|▋         | 1/16 [00:33<07:55, 31.70s/it, Prefill=2468tok/s, Decode=268tok/s]Generating:   6%|▋         | 1/16 [00:34<07:55, 31.70s/it, Prefill=2468tok/s, Decode=267tok/s]Generating:   6%|▋         | 1/16 [00:34<07:55, 31.70s/it, Prefill=2468tok/s, Decode=268tok/s]Generating:   6%|▋         | 1/16 [00:34<07:55, 31.70s/it, Prefill=2468tok/s, Decode=263tok/s]Generating:   6%|▋         | 1/16 [00:34<07:55, 31.70s/it, Prefill=2468tok/s, Decode=264tok/s]Generating:   6%|▋         | 1/16 [00:34<07:55, 31.70s/it, Prefill=2468tok/s, Decode=264tok/s]Generating:   6%|▋         | 1/16 [00:34<07:55, 31.70s/it, Prefill=2468tok/s, Decode=266tok/s]Generating:   6%|▋         | 1/16 [00:34<07:55, 31.70s/it, Prefill=2468tok/s, Decode=266tok/s]Generating:   6%|▋         | 1/16 [00:34<07:55, 31.70s/it, Prefill=2468tok/s, Decode=268tok/s]Generating:  12%|█▎        | 2/16 [00:34<03:25, 14.66s/it, Prefill=2468tok/s, Decode=268tok/s]Generating: 100%|██████████| 16/16 [00:34<00:00,  2.15s/it, Prefill=2468tok/s, Decode=268tok/s]
+Graph capture completed for batch size 16 with 4 shards
+Scale UP time:  9.491822242736816
+Graph capture completed for batch size 15 with 4 shards
+Scale UP time:  2.0536582469940186
+latency:  28.43952703475952  throughput:  0.5625972605115546

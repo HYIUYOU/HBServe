@@ -9,6 +9,7 @@ from torch import nn
 import torch.distributed as dist
 from transformers import Qwen3Config,AutoConfig
 from typing import Tuple, Optional
+import torch.cuda.nvtx as nvtx
 
 from HBserve.layers.activation import SiluAndMul
 from HBserve.layers.attention import Attention
@@ -249,6 +250,7 @@ class Qwen3Model(nn.Module):
             self._dp_target_devices = target_devices
             
             # 为每个设备创建独立的dp_layers
+            nvtx.range_push("replica layers")
             self.dp_layers = nn.ModuleList()
             for idx, target_device in enumerate(target_devices):
                 device_layers = nn.ModuleList()
@@ -262,7 +264,7 @@ class Qwen3Model(nn.Module):
                             setattr(m, "replica_id", idx)
                     device_layers.append(replica)
                 self.dp_layers.append(device_layers)
-            
+            nvtx.range_pop()
             # 创建streams（主设备stream + 每个DP设备stream）
             self.stream0 = torch.cuda.Stream(device=self.layers[0].self_attn.qkv_proj.weight.device)
             self.dp_streams = [torch.cuda.Stream(device=dev) for dev in target_devices]
@@ -275,7 +277,6 @@ class Qwen3Model(nn.Module):
 
     def _capture_decode_graph(self, B, positions, hidden_states, residual, ctx):
         """捕获 decode 阶段的 CUDA Graph（支持多设备）"""
-        import torch.cuda.nvtx as nvtx
         
         # 确保batch足够大
         num_shards = self.local_dp_degree + 1
@@ -394,7 +395,6 @@ class Qwen3Model(nn.Module):
     ) -> torch.Tensor:
         hidden_states = self.embed_tokens(input_ids)
         residual = None
-        import torch.cuda.nvtx as nvtx
         
         if not self.local_dp_enabled:
             for layer in self.layers:
@@ -407,8 +407,9 @@ class Qwen3Model(nn.Module):
         
         # 前面的层
         for i in range(start):
+            nvtx.range_push("norm layer")
             hidden_states, residual = self.layers[i](positions, hidden_states, residual)
-        
+            nvtx.range_pop()
         ctx = get_context()
         dev0 = hidden_states.device
         
@@ -475,22 +476,22 @@ class Qwen3Model(nn.Module):
             with torch.cuda.stream(self.stream0):
                 self.stream0.wait_event(start_event)
                 
-                torch.cuda.nvtx.range_push("stream0_shard0_total")
+                nvtx.range_push("dp_shard0_total")
                 set_context(True, cuq0, cuk0, ctx.max_seqlen_q, ctx.max_seqlen_k, sm0, None, bt0)
                 
                 hs0_d, res0_d = hs0, res0
                 for j in range(start, end):
                     hs0_d, res0_d = self.layers[j](pos0, hs0_d, res0_d)
                 
-                torch.cuda.nvtx.range_pop()
+                nvtx.range_pop()
             
             # 修复：使用 self.dp_streams[0] 而不是 self.stream1
             with torch.cuda.stream(self.dp_streams[0]):
                 self.dp_streams[0].wait_event(start_event)
                 
-                torch.cuda.nvtx.range_push("stream1_shard1_total")
+                nvtx.range_push("dp_shard1_total")
                 
-                torch.cuda.nvtx.range_push("stream1_p2p_transfer")
+                nvtx.range_push("dp_p2p_transfer")
                 cuq1_d = cuq1.to(self._dp_target_devices[0], non_blocking=True)
                 cuk1_d = cuk1.to(self._dp_target_devices[0], non_blocking=True)
                 sm1_d = sm1.to(self._dp_target_devices[0], non_blocking=True)
@@ -498,19 +499,19 @@ class Qwen3Model(nn.Module):
                 pos1_d = pos1.to(self._dp_target_devices[0], non_blocking=True)
                 hs1_d = hs1.to(self._dp_target_devices[0], non_blocking=True)
                 res1_d = None if res1 is None else res1.to(self._dp_target_devices[0], non_blocking=True)
-                torch.cuda.nvtx.range_pop()
+                nvtx.range_pop()
                 
                 set_context(True, cuq1_d, cuk1_d, ctx.max_seqlen_q, ctx.max_seqlen_k, sm1_d, None, bt1_d)
                 
                 for j in range(start, end):
                     hs1_d, res1_d = self.dp_layers[0][j - start](pos1_d, hs1_d, res1_d)
                 
-                torch.cuda.nvtx.range_push("stream1_p2p_transfer_back")
+                nvtx.range_push("dp_p2p_transfer_back")
                 hs1_back = hs1_d.to(dev0, non_blocking=True)
                 res1_back = None if res1_d is None else res1_d.to(dev0, non_blocking=True)
-                torch.cuda.nvtx.range_pop()
+                nvtx.range_pop()
                 
-                torch.cuda.nvtx.range_pop()
+                nvtx.range_pop()
             
             # 等待两个 stream 完成
             nvtx.range_push("wait_both_streams")
@@ -558,7 +559,7 @@ class Qwen3Model(nn.Module):
                 
                 # 检查是否已有该 batch size 的 graph
                 if B not in self.decode_graph_cache:
-                    nvtx.range_push("capture_graph")
+                    nvtx.range_push("capture decode graph")
                     import time
                     t1 = time.time()
                     self.decode_graph_cache[B] = self._capture_decode_graph(
@@ -610,9 +611,11 @@ class Qwen3Model(nn.Module):
                             print(f"Block table size increased from {static_in['block_tables'].shape[1]} to {bt_current.shape[1]}, recapturing graph for batch {B}...")
                             import time
                             t1 = time.time()
+                            nvtx.range_push("capture decode graph")
                             self.decode_graph_cache[B] = self._capture_decode_graph(
                                 B, positions, hidden_states, residual, ctx
                             )
+                            nvtx.range_pop()
                             print("Scale UP time: ", time.time() - t1)
                             graph_data = self.decode_graph_cache[B]
                             nvtx.range_push("decode_graph_execution")
@@ -705,29 +708,29 @@ class Qwen3Model(nn.Module):
                 with torch.cuda.stream(self.stream0):
                     self.stream0.wait_event(start_event)
                     
-                    torch.cuda.nvtx.range_push("stream0_shard0_total")
+                    nvtx.range_push("stream0_shard0_total")
                     set_context(False, slot_mapping=sm0, context_lens=cl0, block_tables=bt0)
                     
                     hs0_d, res0_d = hs0, res0
                     for j in range(start, end):
                         hs0_d, res0_d = self.layers[j](pos0, hs0_d, res0_d)
                     
-                    torch.cuda.nvtx.range_pop()
+                    nvtx.range_pop()
                 
                 # 修复：使用 self.dp_streams[0]
                 with torch.cuda.stream(self.dp_streams[0]):
                     self.dp_streams[0].wait_event(start_event)
                     
-                    torch.cuda.nvtx.range_push("stream1_shard1_total")
+                    nvtx.range_push("stream1_shard1_total")
                     
-                    torch.cuda.nvtx.range_push("stream1_p2p_transfer")
+                    nvtx.range_push("stream1_p2p_transfer")
                     sm1_d = sm1.to(self._dp_target_devices[0], non_blocking=True)
                     cl1_d = cl1.to(self._dp_target_devices[0], non_blocking=True)
                     bt1_d = bt1.to(self._dp_target_devices[0], non_blocking=True) if bt1 is not None else None
                     pos1_d = pos1.to(self._dp_target_devices[0], non_blocking=True)
                     hs1_d = hs1.to(self._dp_target_devices[0], non_blocking=True)
                     res1_d = None if res1 is None else res1.to(self._dp_target_devices[0], non_blocking=True)
-                    torch.cuda.nvtx.range_pop()
+                    nvtx.range_pop()
                     
                     set_context(False, slot_mapping=sm1_d, context_lens=cl1_d, block_tables=bt1_d)
                     
@@ -736,12 +739,12 @@ class Qwen3Model(nn.Module):
                         hs1_d, res1_d = self.dp_layers[0][j - start](pos1_d, hs1_d, res1_d)
                     
                     # 在 stream1 内部传回
-                    torch.cuda.nvtx.range_push("stream1_p2p_transfer_back")
+                    nvtx.range_push("stream1_p2p_transfer_back")
                     hs1_back = hs1_d.to(dev0, non_blocking=True)
                     res1_back = None if res1_d is None else res1_d.to(dev0, non_blocking=True)
-                    torch.cuda.nvtx.range_pop()
+                    nvtx.range_pop()
                     
-                    torch.cuda.nvtx.range_pop()
+                    nvtx.range_pop()
                 
                 nvtx.range_push("wait_both_streams")
                 self.stream0.synchronize()
@@ -797,15 +800,19 @@ class Qwen3ForCausalLM(nn.Module):
         input_ids: torch.Tensor,
         positions: torch.Tensor,
     ) -> torch.Tensor:
+        nvtx.range_push("model forward")
         hidden_states = self.model(input_ids, positions) # 注意这里的input_ids不包含prefix caching命中的部分
+        nvtx.range_pop()
         return hidden_states
 
     def compute_logits(
         self,
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
+        nvtx.range_push("compute logits")
         hidden_device = hidden_states.device
         if self.lm_head.weight.device != hidden_device:
             self.lm_head = self.lm_head.to(hidden_device)
         logits = self.lm_head(hidden_states)
+        nvtx.range_pop()
         return logits

@@ -7,8 +7,9 @@ import torch
 import copy
 from torch import nn
 import torch.distributed as dist
-from transformers import Qwen3Config
+from transformers import Qwen3Config,AutoConfig
 from typing import Tuple, Optional
+import torch.cuda.nvtx as nvtx
 
 from HBserve.layers.activation import SiluAndMul
 from HBserve.layers.attention import Attention
@@ -21,6 +22,35 @@ from HBserve.utils.context import get_context, set_context, Context
 # 导入优化 Mixin 和执行逻辑
 
 from HBserve.models import register_model  # ← 导入装饰器
+
+def fix_qwen3_config_if_big_model(config: Qwen3Config) -> Qwen3Config:
+    H = getattr(config, 'hidden_size', None)
+    if H is None:
+        return config
+
+    # number of transformer layers
+    L = getattr(config, 'num_hidden_layers', None) or getattr(config, 'num_layers', None)
+    if L is None:
+        return config
+
+    # intermediate size (fallback to 4*H if not provided)
+    inter = getattr(config, 'intermediate_size', 4 * H)
+
+    # approximate vocab contribution
+    vocab = getattr(config, 'vocab_size', 0) or 0
+
+    # estimate parameters
+    per_layer = 4 * int(H) * int(H) + 3 * int(H) * int(inter)
+    total_params = int(per_layer) * int(L) + 2 * int(H) * int(vocab)
+
+    # apply fixes only for models >= 14 billion parameters
+    if total_params >= 13_000_000_000:
+        if hasattr(config, 'hidden_size'):
+            config.hidden_size = 5120
+        if hasattr(config, 'max_position_embeddings'):
+            config.max_position_embeddings = 40960
+
+    return config
 
 class Qwen3Attention(nn.Module):
 
@@ -82,11 +112,6 @@ class Qwen3Attention(nn.Module):
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
-        # ===== 添加空张量检查 =====
-        if hidden_states.size(0) == 0:
-            # 返回正确形状的空张量
-            return torch.empty_like(hidden_states)
-        # ==========================
         qkv = self.qkv_proj(hidden_states) # 注意这里的hidden_states 不包含prefix caching命中的部分
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1) # q，k，v都不包含prefix caching命中的部分
         q_by_head = q.view(-1, self.num_heads, self.head_dim)
@@ -137,6 +162,7 @@ class Qwen3DecoderLayer(nn.Module):
         config: Qwen3Config,
     ) -> None:
         super().__init__()
+        config = fix_qwen3_config_if_big_model(config)
         self.self_attn = Qwen3Attention(
             hidden_size=config.hidden_size,
             num_heads=config.num_attention_heads,
@@ -172,185 +198,194 @@ class Qwen3DecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states)
         return hidden_states, residual
 
+
 # ==== CUDA Graph ====
 class Qwen3Model(nn.Module):
 
-    def __init__(
-        self,
-        config: Qwen3Config,
-    ) -> None:
+    def __init__(self, config: Qwen3Config):
         super().__init__()
         self.embed_tokens = VocabParallelEmbedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([Qwen3DecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        
+        # ===== 修改DP设备配置解析 =====
+        # 支持 local_dp_devices 列表（优先）或单个 local_dp_device（向后兼容）
+        dp_device = getattr(config, "local_dp_device", None)
+        dp_devices = getattr(config, "local_dp_devices", None)
+        
+        if dp_devices is not None:
+            self.local_dp_devices = dp_devices if isinstance(dp_devices, list) else [dp_devices]
+        elif dp_device is not None:
+            self.local_dp_devices = [dp_device]
+        else:
+            self.local_dp_devices = []
+        
         self.local_dp_start = getattr(config, "local_dp_start_layer", None)
         self.local_dp_end = getattr(config, "local_dp_end_layer", None)
-        self.local_dp_device = getattr(config, "local_dp_device", None)
+        self.local_dp_degree = len(self.local_dp_devices)
+        
+        # 更新启用判断条件
         self.local_dp_enabled = (
             self.local_dp_start is not None and
             self.local_dp_end is not None and
-            self.local_dp_device is not None and
+            self.local_dp_degree > 0 and
             0 <= self.local_dp_start < self.local_dp_end <= len(self.layers)
         )
+        # ============================
         
-        # CUDA Graph 相关
+        # CUDA Graph相关
         self.use_cuda_graph = getattr(config, "use_cuda_graph", True)
-        self.decode_graph_cache = {}  # 缓存不同 batch size 的 graph
+        self.decode_graph_cache = {}
         self.graph_pool_handle = None
         
         if self.local_dp_enabled:
-            target_device = self.local_dp_device
-            if isinstance(target_device, int):
-                target_device = f"cuda:{target_device}"
-            self._dp_target_device = torch.device(target_device)
-            dp_layers = []
-            for i in range(self.local_dp_start, self.local_dp_end):
-                replica = copy.deepcopy(self.layers[i]).to(self._dp_target_device)
-                for m in replica.modules():
-                    if hasattr(m, "k_cache") and hasattr(m, "v_cache"):
-                        setattr(m, "is_replica", True)
-                        setattr(m, "replica_device", self._dp_target_device)
-                dp_layers.append(replica)
-            self.dp_layers = nn.ModuleList(dp_layers)
+            # ===== 修改为每个DP设备创建副本和stream =====
+            target_devices = []
+            for dev in self.local_dp_devices:
+                if isinstance(dev, int):
+                    target_devices.append(torch.device(f"cuda:{dev}"))
+                else:
+                    target_devices.append(torch.device(dev))
             
-            # 创建持久化的 streams
+            self._dp_target_devices = target_devices
+            
+            # 为每个设备创建独立的dp_layers
+            nvtx.range_push("replica layers")
+            self.dp_layers = nn.ModuleList()
+            for idx, target_device in enumerate(target_devices):
+                device_layers = nn.ModuleList()
+                for i in range(self.local_dp_start, self.local_dp_end):
+                    replica = copy.deepcopy(self.layers[i]).to(target_device)
+                    # 标记副本属性
+                    for m in replica.modules():
+                        if hasattr(m, "k_cache") and hasattr(m, "v_cache"):
+                            setattr(m, "is_replica", True)
+                            setattr(m, "replica_device", target_device)
+                            setattr(m, "replica_id", idx)
+                    device_layers.append(replica)
+                self.dp_layers.append(device_layers)
+            nvtx.range_pop()
+            # 创建streams（主设备stream + 每个DP设备stream）
             self.stream0 = torch.cuda.Stream(device=self.layers[0].self_attn.qkv_proj.weight.device)
-            self.stream1 = torch.cuda.Stream(device=self._dp_target_device)
+            self.dp_streams = [torch.cuda.Stream(device=dev) for dev in target_devices]
+            # ==========================================
         else:
             self.dp_layers = None
+            self.dp_streams = None
             self.stream0 = None
-            self.stream1 = None
+            self._dp_target_devices = []
 
     def _capture_decode_graph(self, B, positions, hidden_states, residual, ctx):
-        """捕获 decode 阶段的 CUDA Graph"""
-        import torch.cuda.nvtx as nvtx
-        # ===== 添加检查 =====
-        if B < 2:
-            print(f"Batch size {B} too small for graph capture, need at least 2")
+        """捕获 decode 阶段的 CUDA Graph（支持多设备）"""
+        
+        # 确保batch足够大
+        num_shards = self.local_dp_degree + 1
+        if B < num_shards:
+            print(f"Batch size {B} too small for {num_shards} shards, need at least {num_shards}")
             return None
-        # ====================
-        start = self.local_dp_start
-        end = self.local_dp_end
-        mid = B // 2
+        
+        start, end = self.local_dp_start, self.local_dp_end
         dev0 = hidden_states.device
         
-        # 分割数据
-        pos0, pos1 = positions[:mid], positions[mid:]
-        hs0, hs1 = hidden_states[:mid], hidden_states[mid:]
-        res0 = None if residual is None else residual[:mid]
-        res1 = None if residual is None else residual[mid:]
+        # 分割batch
+        shard_sizes = [B // num_shards] * num_shards
+        for i in range(B % num_shards):
+            shard_sizes[i] += 1
         
-        sm0 = ctx.slot_mapping[:mid].clone()
-        sm1 = ctx.slot_mapping[mid:].clone()
-        cl0 = ctx.context_lens[:mid].clone()
-        cl1 = ctx.context_lens[mid:].clone()
+        offsets = [0]
+        for size in shard_sizes[:-1]:
+            offsets.append(offsets[-1] + size)
+        offsets.append(B)
         
-        # 获取最大 block 表大小并创建固定大小的 buffer
+        # 准备每个shard的静态buffer
+        static_inputs = []
+        static_outputs = []
+        graphs = []
+        
+        # 获取最大block表大小
+        max_blocks = None
         if ctx.block_tables is not None:
             cur_max_blocks = ctx.block_tables.shape[1]
-            max_blocks = int(cur_max_blocks * 10)
-            # 创建固定大小的 block_tables buffer
-            bt0 = torch.zeros((mid, max_blocks), dtype=ctx.block_tables.dtype, device=ctx.block_tables.device)
-            bt1 = torch.zeros((B - mid, max_blocks), dtype=ctx.block_tables.dtype, device=ctx.block_tables.device)
-            # 复制当前有效数据
-            bt0[:, :ctx.block_tables.shape[1]].copy_(ctx.block_tables[:mid])
-            bt1[:, :ctx.block_tables.shape[1]].copy_(ctx.block_tables[mid:])
-        else:
-            max_blocks = None
-            bt0 = None
-            bt1 = None
+            max_blocks = int(cur_max_blocks * 1.5)  # 预留50%空间
         
-        # 准备静态 buffer
-        static_pos0 = pos0.clone()
-        static_hs0 = hs0.clone()
-        static_res0 = res0.clone() if res0 is not None else None
-        
-        static_pos1 = pos1.clone()
-        static_hs1 = hs1.clone()
-        static_res1 = res1.clone() if res1 is not None else None
-        
-        static_sm1 = sm1.clone()
-        static_cl1 = cl1.clone()
-        static_bt1 = bt1.clone() if bt1 is not None else None
-        
-        # Stream1 的 GPU 侧 buffer
-        static_pos1_d = static_pos1.to(self._dp_target_device)
-        static_hs1_d = static_hs1.to(self._dp_target_device)
-        static_res1_d = static_res1.to(self._dp_target_device) if static_res1 is not None else None
-        static_sm1_d = static_sm1.to(self._dp_target_device)
-        static_cl1_d = static_cl1.to(self._dp_target_device)
-        static_bt1_d = static_bt1.to(self._dp_target_device) if static_bt1 is not None else None
-        
-        # Warmup (至少 3 次)
-        print(f"Warming up CUDA Graph for batch size {B} with max_blocks={max_blocks}...")
-        for _ in range(3):
-            with torch.cuda.stream(self.stream0):
-                set_context(False, slot_mapping=sm0, context_lens=cl0, block_tables=bt0)
-                tmp_hs0, tmp_res0 = static_hs0.clone(), static_res0.clone() if static_res0 is not None else None
-                for j in range(start, end):
-                    tmp_hs0, tmp_res0 = self.layers[j](static_pos0, tmp_hs0, tmp_res0)
+        # Warmup和捕获每个shard的graph
+        for i in range(num_shards):
+            s, e = offsets[i], offsets[i+1]
+            is_main_shard = (i == 0)
             
-            with torch.cuda.stream(self.stream1):
-                static_hs1_d.copy_(static_hs1, non_blocking=True)
-                if static_res1_d is not None:
-                    static_res1_d.copy_(static_res1, non_blocking=True)
-                
-                set_context(False, slot_mapping=static_sm1_d, context_lens=static_cl1_d, block_tables=static_bt1_d)
-                tmp_hs1_d, tmp_res1_d = static_hs1_d.clone(), static_res1_d.clone() if static_res1_d is not None else None
-                for j in range(start, end):
-                    tmp_hs1_d, tmp_res1_d = self.dp_layers[j - start](static_pos1_d, tmp_hs1_d, tmp_res1_d)
+            # 准备该shard的数据
+            pos = positions[s:e]
+            hs = hidden_states[s:e]
+            res = residual[s:e] if residual is not None else None
+            sm = ctx.slot_mapping[s:e]
+            cl = ctx.context_lens[s:e]
+            bt = ctx.block_tables[s:e] if ctx.block_tables is not None else None
             
-            self.stream0.synchronize()
-            self.stream1.synchronize()
+            if is_main_shard:
+                stream = self.stream0
+                layers = self.layers  # 主设备使用完整的layers
+                device = dev0
+            else:
+                device = self._dp_target_devices[i-1]
+                stream = self.dp_streams[i-1]
+                layers = self.dp_layers[i-1]  # DP设备使用其对应的副本layers
+                # 将数据移动到目标设备
+                pos = pos.to(device)
+                hs = hs.to(device)
+                res = res.to(device) if res is not None else None
+                sm = sm.to(device)
+                cl = cl.to(device)
+                bt = bt.to(device) if bt is not None else None
+            
+            # 为block_tables创建固定大小的buffer
+            if bt is not None:
+                fixed_bt = torch.zeros((len(pos), max_blocks), dtype=bt.dtype, device=bt.device)
+                fixed_bt[:, :bt.shape[1]] = bt
+                bt = fixed_bt
+            
+            # Warmup
+            for _ in range(3):
+                with torch.cuda.stream(stream):
+                    set_context(False, slot_mapping=sm, context_lens=cl, block_tables=bt)
+                    tmp_hs, tmp_res = hs, res
+                    # 修复：正确处理layer索引
+                    for j in range(start, end):
+                        layer_idx = j if is_main_shard else j - start
+                        tmp_hs, tmp_res = layers[layer_idx](pos, tmp_hs, tmp_res)
+            
+            # 捕获Graph
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph, stream=stream, pool=self.graph_pool_handle):
+                set_context(False, slot_mapping=sm, context_lens=cl, block_tables=bt)
+                out_hs, out_res = hs, res
+                # 修复：正确处理layer索引
+                for j in range(start, end):
+                    layer_idx = j if is_main_shard else j - start
+                    out_hs, out_res = layers[layer_idx](pos, out_hs, out_res)
+            
+            graphs.append(graph)
+            static_inputs.append({
+                'positions': pos,
+                'hidden_states': hs,
+                'residual': res,
+                'slot_mapping': sm,
+                'context_lens': cl,
+                'block_tables': bt,
+            })
+            static_outputs.append({
+                'hidden_states': out_hs,
+                'residual': out_res,
+            })
         
         torch.cuda.synchronize()
-        
-        # 录制 Graph0 (stream0)
-        print("Capturing graph0...")
-        graph0 = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph0, stream=self.stream0, pool=self.graph_pool_handle):
-            set_context(False, slot_mapping=sm0, context_lens=cl0, block_tables=bt0)
-            out_hs0 = static_hs0
-            out_res0 = static_res0
-            for j in range(start, end):
-                out_hs0, out_res0 = self.layers[j](static_pos0, out_hs0, out_res0)
-        
-        # 录制 Graph1 (stream1)
-        print("Capturing graph1...")
-        graph1 = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph1, stream=self.stream1, pool=self.graph_pool_handle):
-            set_context(False, slot_mapping=static_sm1_d, context_lens=static_cl1_d, block_tables=static_bt1_d)
-            out_hs1_d = static_hs1_d
-            out_res1_d = static_res1_d
-            for j in range(start, end):
-                out_hs1_d, out_res1_d = self.dp_layers[j - start](static_pos1_d, out_hs1_d, out_res1_d)
-        
-        torch.cuda.synchronize()
-        print(f"Graph capture completed for batch size {B}")
+        print(f"Graph capture completed for batch size {B} with {num_shards} shards")
         
         return {
-            'graph0': graph0,
-            'graph1': graph1,
-            'max_blocks': max_blocks,  # 保存最大 block 数
-            'static_inputs': {
-                'pos0': static_pos0,
-                'hs0': static_hs0,
-                'res0': static_res0,
-                'pos1': static_pos1,
-                'hs1': static_hs1,
-                'res1': static_res1,
-                'hs1_d': static_hs1_d,
-                'res1_d': static_res1_d,
-                'sm0': sm0,
-                'cl0': cl0,
-                'bt0': bt0,
-            },
-            'static_outputs': {
-                'hs0': out_hs0,
-                'res0': out_res0,
-                'hs1_d': out_hs1_d,
-                'res1_d': out_res1_d,
-            }
+            'graphs': graphs,
+            'max_blocks': max_blocks,
+            'static_inputs': static_inputs,
+            'static_outputs': static_outputs,
+            'shard_sizes': shard_sizes,
         }
 
     def forward(
@@ -360,7 +395,6 @@ class Qwen3Model(nn.Module):
     ) -> torch.Tensor:
         hidden_states = self.embed_tokens(input_ids)
         residual = None
-        import torch.cuda.nvtx as nvtx
         
         if not self.local_dp_enabled:
             for layer in self.layers:
@@ -373,8 +407,9 @@ class Qwen3Model(nn.Module):
         
         # 前面的层
         for i in range(start):
+            nvtx.range_push("norm layer")
             hidden_states, residual = self.layers[i](positions, hidden_states, residual)
-        
+            nvtx.range_pop()
         ctx = get_context()
         dev0 = hidden_states.device
         
@@ -410,9 +445,6 @@ class Qwen3Model(nn.Module):
                 return hidden_states
             # ==========================
 
-            mid = B // 2
-            n0 = ctx.cu_seqlens_q[mid].item()
-            
             # 分割数据
             pos0, pos1 = positions[:n0], positions[n0:]
             hs0, hs1 = hidden_states[:n0], hidden_states[n0:]
@@ -444,47 +476,47 @@ class Qwen3Model(nn.Module):
             with torch.cuda.stream(self.stream0):
                 self.stream0.wait_event(start_event)
                 
-                torch.cuda.nvtx.range_push("stream0_shard0_total")
+                nvtx.range_push("dp_shard0_total")
                 set_context(True, cuq0, cuk0, ctx.max_seqlen_q, ctx.max_seqlen_k, sm0, None, bt0)
                 
                 hs0_d, res0_d = hs0, res0
                 for j in range(start, end):
                     hs0_d, res0_d = self.layers[j](pos0, hs0_d, res0_d)
                 
-                torch.cuda.nvtx.range_pop()
+                nvtx.range_pop()
             
-            # Stream 1: 处理 shard 1 (dp_layers) on dp_device
-            with torch.cuda.stream(self.stream1):
-                self.stream1.wait_event(start_event)
+            # 修复：使用 self.dp_streams[0] 而不是 self.stream1
+            with torch.cuda.stream(self.dp_streams[0]):
+                self.dp_streams[0].wait_event(start_event)
                 
-                torch.cuda.nvtx.range_push("stream1_shard1_total")
+                nvtx.range_push("dp_shard1_total")
                 
-                torch.cuda.nvtx.range_push("stream1_p2p_transfer")
-                cuq1_d = cuq1.to(self._dp_target_device, non_blocking=True)
-                cuk1_d = cuk1.to(self._dp_target_device, non_blocking=True)
-                sm1_d = sm1.to(self._dp_target_device, non_blocking=True)
-                bt1_d = bt1.to(self._dp_target_device, non_blocking=True) if bt1 is not None else None
-                pos1_d = pos1.to(self._dp_target_device, non_blocking=True)
-                hs1_d = hs1.to(self._dp_target_device, non_blocking=True)
-                res1_d = None if res1 is None else res1.to(self._dp_target_device, non_blocking=True)
-                torch.cuda.nvtx.range_pop()
+                nvtx.range_push("dp_p2p_transfer")
+                cuq1_d = cuq1.to(self._dp_target_devices[0], non_blocking=True)
+                cuk1_d = cuk1.to(self._dp_target_devices[0], non_blocking=True)
+                sm1_d = sm1.to(self._dp_target_devices[0], non_blocking=True)
+                bt1_d = bt1.to(self._dp_target_devices[0], non_blocking=True) if bt1 is not None else None
+                pos1_d = pos1.to(self._dp_target_devices[0], non_blocking=True)
+                hs1_d = hs1.to(self._dp_target_devices[0], non_blocking=True)
+                res1_d = None if res1 is None else res1.to(self._dp_target_devices[0], non_blocking=True)
+                nvtx.range_pop()
                 
                 set_context(True, cuq1_d, cuk1_d, ctx.max_seqlen_q, ctx.max_seqlen_k, sm1_d, None, bt1_d)
                 
                 for j in range(start, end):
-                    hs1_d, res1_d = self.dp_layers[j - start](pos1_d, hs1_d, res1_d)
+                    hs1_d, res1_d = self.dp_layers[0][j - start](pos1_d, hs1_d, res1_d)
                 
-                torch.cuda.nvtx.range_push("stream1_p2p_transfer_back")
+                nvtx.range_push("dp_p2p_transfer_back")
                 hs1_back = hs1_d.to(dev0, non_blocking=True)
                 res1_back = None if res1_d is None else res1_d.to(dev0, non_blocking=True)
-                torch.cuda.nvtx.range_pop()
+                nvtx.range_pop()
                 
-                torch.cuda.nvtx.range_pop()  # stream1_shard1_total
+                nvtx.range_pop()
             
             # 等待两个 stream 完成
             nvtx.range_push("wait_both_streams")
             self.stream0.synchronize()
-            self.stream1.synchronize()
+            self.dp_streams[0].synchronize()
             nvtx.range_pop()
             
             # 合并结果
@@ -500,19 +532,19 @@ class Qwen3Model(nn.Module):
             
         else:  # decode 阶段 - 使用 CUDA Graph
             B = positions.size(0)
-            # mid = B // 2
+            num_shards = self.local_dp_degree + 1
+            
             # ===== 添加空batch检查 =====
             if B == 0:
-                # 空batch，直接返回
+                # 空batch，直接执行后续层
                 for i in range(end, len(self.layers)):
                     hidden_states, residual = self.layers[i](positions, hidden_states, residual)
                 hidden_states, _ = self.norm(hidden_states, residual)
                 return hidden_states
-            # ==========================
             
-            # ===== 确保 mid 不会导致空shard =====
-            if B == 1:
-                # 只有1个样本，不分割
+            # ===== 确保 batch 足够大以支持多路并行 =====
+            if B < num_shards:
+                # batch太小，退化为串行执行
                 for j in range(start, end):
                     hidden_states, residual = self.layers[j](positions, hidden_states, residual)
                 for i in range(end, len(self.layers)):
@@ -520,150 +552,132 @@ class Qwen3Model(nn.Module):
                 hidden_states, _ = self.norm(hidden_states, residual)
                 return hidden_states
             
-            mid = max(1, min(B - 1, B // 2))  # 确保 mid 在 [1, B-1] 范围内
-            # ====================================
+            mid = B // 2  # 目前只实现两路shard，后续可扩展
+            
             if self.use_cuda_graph:
                 nvtx.range_push("decode_graph_execution")
                 
-                # 检查是否已经有该 batch size 的 graph
+                # 检查是否已有该 batch size 的 graph
                 if B not in self.decode_graph_cache:
-                    nvtx.range_push("capture_graph")
+                    nvtx.range_push("capture decode graph")
+                    import time
+                    t1 = time.time()
                     self.decode_graph_cache[B] = self._capture_decode_graph(
                         B, positions, hidden_states, residual, ctx
                     )
+                    print("Scale UP time: ", time.time() - t1)
                     nvtx.range_pop()
                 
                 graph_data = self.decode_graph_cache[B]
                 
-                # 保存原始 context
-                ctx_orig = (ctx.is_prefill, None, None, 0, 0, 
-                            ctx.slot_mapping, ctx.context_lens, ctx.block_tables)
+                # 分割数据
+                shard_sizes = graph_data['shard_sizes']
+                offsets = [0]
+                for size in shard_sizes[:-1]:
+                    offsets.append(offsets[-1] + size)
                 
-                # 更新静态输入 buffer
+                # 更新所有shard的输入
                 nvtx.range_push("update_graph_inputs")
-                
-                # Shard 0 inputs
-                graph_data['static_inputs']['pos0'].copy_(positions[:mid])
-                graph_data['static_inputs']['hs0'].copy_(hidden_states[:mid])
-                if residual is not None:
-                    graph_data['static_inputs']['res0'].copy_(residual[:mid])
-                
-                # Shard 1 inputs
-                graph_data['static_inputs']['pos1'].copy_(positions[mid:])
-                graph_data['static_inputs']['hs1'].copy_(hidden_states[mid:])
-                if residual is not None:
-                    graph_data['static_inputs']['res1'].copy_(residual[mid:])
-                
-                # 更新 Shard 1 的 GPU 侧 buffer
-                with torch.cuda.stream(self.stream1):
-                    graph_data['static_inputs']['hs1_d'].copy_(
-                        graph_data['static_inputs']['hs1'], non_blocking=True
-                    )
-                    if graph_data['static_inputs']['res1_d'] is not None:
-                        graph_data['static_inputs']['res1_d'].copy_(
-                            graph_data['static_inputs']['res1'], non_blocking=True
-                        )
-                
-                # 更新 context metadata
-                sm0 = ctx.slot_mapping[:mid]
-                sm1 = ctx.slot_mapping[mid:]
-                cl0 = ctx.context_lens[:mid]
-                cl1 = ctx.context_lens[mid:]
-                
-                # 处理 block_tables（支持大小变化）
-                if ctx.block_tables is not None:
-                    bt0_current = ctx.block_tables[:mid]
-                    bt1_current = ctx.block_tables[mid:]
+                for i in range(num_shards):
+                    s, e = offsets[i], offsets[i] + shard_sizes[i]
+                    static_in = graph_data['static_inputs'][i]  # 列表索引
                     
-                    # 检查是否需要重新捕获 graph（block 数量增加超过预留空间）
-                    if bt0_current.shape[1] > graph_data['max_blocks']:
-                        print(f"Block table size increased from {graph_data['max_blocks']} to {bt0_current.shape[1]}, recapturing graph...")
-                        nvtx.range_pop()  # update_graph_inputs
-                        nvtx.range_pop()  # decode_graph_execution
-                        
-                        # 重新捕获 graph
-                        self.decode_graph_cache[B] = self._capture_decode_graph(
-                            B, positions, hidden_states, residual, ctx
-                        )
-                        graph_data = self.decode_graph_cache[B]
-                        
-                        nvtx.range_push("decode_graph_execution")
-                        nvtx.range_push("update_graph_inputs")
-                        
-                        # 重新准备输入
-                        graph_data['static_inputs']['pos0'].copy_(positions[:mid])
-                        graph_data['static_inputs']['hs0'].copy_(hidden_states[:mid])
+                    # 更新输入数据
+                    if i == 0:  # 主设备
+                        static_in['positions'].copy_(positions[s:e])
+                        static_in['hidden_states'].copy_(hidden_states[s:e])
                         if residual is not None:
-                            graph_data['static_inputs']['res0'].copy_(residual[:mid])
-                        
-                        graph_data['static_inputs']['pos1'].copy_(positions[mid:])
-                        graph_data['static_inputs']['hs1'].copy_(hidden_states[mid:])
-                        if residual is not None:
-                            graph_data['static_inputs']['res1'].copy_(residual[mid:])
-                        
-                        with torch.cuda.stream(self.stream1):
-                            graph_data['static_inputs']['hs1_d'].copy_(
-                                graph_data['static_inputs']['hs1'], non_blocking=True
+                            static_in['residual'].copy_(residual[s:e])
+                    else:  # DP设备
+                        # 先在CPU侧准备数据，然后通过非阻塞传输
+                        with torch.cuda.stream(self.dp_streams[i-1]):
+                            static_in['positions'].copy_(positions[s:e], non_blocking=True)
+                            static_in['hidden_states'].copy_(hidden_states[s:e], non_blocking=True)
+                            if residual is not None and static_in['residual'] is not None:
+                                static_in['residual'].copy_(residual[s:e], non_blocking=True)
+                    
+                    # 更新context数据
+                    static_in['slot_mapping'].copy_(ctx.slot_mapping[s:e])
+                    static_in['context_lens'].copy_(ctx.context_lens[s:e])
+                    
+                    # 处理block_tables（大小可能变化）
+                    if ctx.block_tables is not None and static_in['block_tables'] is not None:
+                        bt_current = ctx.block_tables[s:e]
+                        if bt_current.shape[1] > static_in['block_tables'].shape[1]:
+                            # block表大小超出预留空间，重新捕获graph
+                            nvtx.range_pop()  # update_graph_inputs
+                            nvtx.range_pop()  # decode_graph_execution
+                            
+                            print(f"Block table size increased from {static_in['block_tables'].shape[1]} to {bt_current.shape[1]}, recapturing graph for batch {B}...")
+                            import time
+                            t1 = time.time()
+                            nvtx.range_push("capture decode graph")
+                            self.decode_graph_cache[B] = self._capture_decode_graph(
+                                B, positions, hidden_states, residual, ctx
                             )
-                            if graph_data['static_inputs']['res1_d'] is not None:
-                                graph_data['static_inputs']['res1_d'].copy_(
-                                    graph_data['static_inputs']['res1'], non_blocking=True
-                                )
-                        
-                        bt0_current = ctx.block_tables[:mid]
-                        bt1_current = ctx.block_tables[mid:]
-                    
-                    # 复制 block_tables（只复制有效部分，其余保持为 0）
-                    bt0 = graph_data['static_inputs']['bt0']
-                    bt0.zero_()  # 先清零
-                    bt0[:, :bt0_current.shape[1]].copy_(bt0_current)
-                else:
-                    bt0 = None
-                
-                graph_data['static_inputs']['sm0'].copy_(sm0)
-                graph_data['static_inputs']['cl0'].copy_(cl0)
+                            nvtx.range_pop()
+                            print("Scale UP time: ", time.time() - t1)
+                            graph_data = self.decode_graph_cache[B]
+                            nvtx.range_push("decode_graph_execution")
+                            nvtx.range_push("update_graph_inputs")
+                            
+                            # 重新准备输入（会重新循环）
+                        else:
+                            # 只复制有效部分，其余保持为0
+                            static_in['block_tables'].zero_()
+                            static_in['block_tables'][:, :bt_current.shape[1]].copy_(bt_current)
                 
                 nvtx.range_pop()
                 
-                # Replay graphs - 真正的并行！
+                # 并行replay所有graphs
                 nvtx.range_push("replay_graphs")
-                graph_data['graph0'].replay()
-                graph_data['graph1'].replay()
+                for i, graph in enumerate(graph_data['graphs']):
+                    if i == 0:
+                        graph.replay()
+                    else:
+                        # 确保数据传输完成
+                        self.dp_streams[i-1].synchronize()
+                        graph.replay()
                 nvtx.range_pop()
                 
-                # 在 replay 后手动执行 P2P 传输
-                nvtx.range_push("p2p_transfer_back")
-                with torch.cuda.stream(self.stream1):
-                    hs1_back = graph_data['static_outputs']['hs1_d'].to(dev0, non_blocking=True)
-                    res1_back = graph_data['static_outputs']['res1_d'].to(dev0, non_blocking=True) if graph_data['static_outputs']['res1_d'] is not None else None
-                nvtx.range_pop()
-                
-                # 等待 graphs 和传输完成
-                nvtx.range_push("wait_graphs")
+                # 等待所有stream完成
+                nvtx.range_push("wait_all_streams")
                 self.stream0.synchronize()
-                self.stream1.synchronize()
+                for stream in self.dp_streams:
+                    stream.synchronize()
                 nvtx.range_pop()
                 
-                # 从静态输出 buffer 和传输结果合并
+                # 合并结果
                 nvtx.range_push("merge_results")
-                hidden_states = torch.cat([
-                    graph_data['static_outputs']['hs0'],
-                    hs1_back
-                ], dim=0)
+                all_hidden_states = []
+                all_residuals = []
                 
-                if graph_data['static_outputs']['res0'] is not None:
-                    residual = torch.cat([
-                        graph_data['static_outputs']['res0'],
-                        res1_back
-                    ], dim=0)
-                else:
-                    residual = None
+                for i in range(num_shards):
+                    out_hs = graph_data['static_outputs'][i]['hidden_states']
+                    out_res = graph_data['static_outputs'][i]['residual']
+                    
+                    if i == 0:
+                        all_hidden_states.append(out_hs)
+                        if out_res is not None:
+                            all_residuals.append(out_res)
+                    else:
+                        # DP设备的结果需要传回主设备
+                        with torch.cuda.stream(self.dp_streams[i-1]):
+                            hs_back = out_hs.to(dev0, non_blocking=True)
+                            res_back = out_res.to(dev0, non_blocking=True) if out_res is not None else None
+                        self.dp_streams[i-1].synchronize()
+                        all_hidden_states.append(hs_back)
+                        if res_back is not None:
+                            all_residuals.append(res_back)
+                
+                hidden_states = torch.cat(all_hidden_states, dim=0)
+                residual = torch.cat(all_residuals, dim=0) if all_residuals else None
                 nvtx.range_pop()
                 
                 # 恢复原始 context
-                nvtx.range_push("restore_context")
+                ctx_orig = (False, None, None, 0, 0,
+                        ctx.slot_mapping, ctx.context_lens, ctx.block_tables)
                 set_context(*ctx_orig)
-                nvtx.range_pop()
                 
                 nvtx.range_pop()  # decode_graph_execution
                 
@@ -694,46 +708,47 @@ class Qwen3Model(nn.Module):
                 with torch.cuda.stream(self.stream0):
                     self.stream0.wait_event(start_event)
                     
-                    torch.cuda.nvtx.range_push("stream0_shard0_total")
+                    nvtx.range_push("stream0_shard0_total")
                     set_context(False, slot_mapping=sm0, context_lens=cl0, block_tables=bt0)
                     
                     hs0_d, res0_d = hs0, res0
                     for j in range(start, end):
                         hs0_d, res0_d = self.layers[j](pos0, hs0_d, res0_d)
                     
-                    torch.cuda.nvtx.range_pop()
+                    nvtx.range_pop()
                 
-                # Stream 1
-                with torch.cuda.stream(self.stream1):
-                    self.stream1.wait_event(start_event)
+                # 修复：使用 self.dp_streams[0]
+                with torch.cuda.stream(self.dp_streams[0]):
+                    self.dp_streams[0].wait_event(start_event)
                     
-                    torch.cuda.nvtx.range_push("stream1_shard1_total")
+                    nvtx.range_push("stream1_shard1_total")
                     
-                    torch.cuda.nvtx.range_push("stream1_p2p_transfer")
-                    sm1_d = sm1.to(self._dp_target_device, non_blocking=True)
-                    cl1_d = cl1.to(self._dp_target_device, non_blocking=True)
-                    bt1_d = bt1.to(self._dp_target_device, non_blocking=True) if bt1 is not None else None
-                    pos1_d = pos1.to(self._dp_target_device, non_blocking=True)
-                    hs1_d = hs1.to(self._dp_target_device, non_blocking=True)
-                    res1_d = None if res1 is None else res1.to(self._dp_target_device, non_blocking=True)
-                    torch.cuda.nvtx.range_pop()
+                    nvtx.range_push("stream1_p2p_transfer")
+                    sm1_d = sm1.to(self._dp_target_devices[0], non_blocking=True)
+                    cl1_d = cl1.to(self._dp_target_devices[0], non_blocking=True)
+                    bt1_d = bt1.to(self._dp_target_devices[0], non_blocking=True) if bt1 is not None else None
+                    pos1_d = pos1.to(self._dp_target_devices[0], non_blocking=True)
+                    hs1_d = hs1.to(self._dp_target_devices[0], non_blocking=True)
+                    res1_d = None if res1 is None else res1.to(self._dp_target_devices[0], non_blocking=True)
+                    nvtx.range_pop()
                     
                     set_context(False, slot_mapping=sm1_d, context_lens=cl1_d, block_tables=bt1_d)
                     
+                    # 修复：正确索引 dp_layers
                     for j in range(start, end):
-                        hs1_d, res1_d = self.dp_layers[j - start](pos1_d, hs1_d, res1_d)
+                        hs1_d, res1_d = self.dp_layers[0][j - start](pos1_d, hs1_d, res1_d)
                     
                     # 在 stream1 内部传回
-                    torch.cuda.nvtx.range_push("stream1_p2p_transfer_back")
+                    nvtx.range_push("stream1_p2p_transfer_back")
                     hs1_back = hs1_d.to(dev0, non_blocking=True)
                     res1_back = None if res1_d is None else res1_d.to(dev0, non_blocking=True)
-                    torch.cuda.nvtx.range_pop()
+                    nvtx.range_pop()
                     
-                    torch.cuda.nvtx.range_pop()
+                    nvtx.range_pop()
                 
                 nvtx.range_push("wait_both_streams")
                 self.stream0.synchronize()
-                self.stream1.synchronize()
+                self.dp_streams[0].synchronize()
                 nvtx.range_pop()
                 
                 nvtx.range_push("merge_results")
@@ -744,15 +759,15 @@ class Qwen3Model(nn.Module):
                 set_context(*ctx_orig)
                 
                 nvtx.range_pop()  # decode_parallel_execution
-        
+
         # 后面的层
         for i in range(end, len(self.layers)):
             hidden_states, residual = self.layers[i](positions, hidden_states, residual)
-        
+
         nvtx.range_push("final_norm")
         hidden_states, _ = self.norm(hidden_states, residual)
         nvtx.range_pop()
-        
+
         return hidden_states
 
 
@@ -773,6 +788,7 @@ class Qwen3ForCausalLM(nn.Module):
         config: Qwen3Config
     ) -> None:
         super().__init__()
+        config = fix_qwen3_config_if_big_model(config)
         self.model = Qwen3Model(config)
         self.lm_head = ParallelLMHead(config.vocab_size, config.hidden_size)
         if config.tie_word_embeddings:
@@ -784,15 +800,19 @@ class Qwen3ForCausalLM(nn.Module):
         input_ids: torch.Tensor,
         positions: torch.Tensor,
     ) -> torch.Tensor:
+        nvtx.range_push("model forward")
         hidden_states = self.model(input_ids, positions) # 注意这里的input_ids不包含prefix caching命中的部分
+        nvtx.range_pop()
         return hidden_states
 
     def compute_logits(
         self,
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
+        nvtx.range_push("compute logits")
         hidden_device = hidden_states.device
         if self.lm_head.weight.device != hidden_device:
             self.lm_head = self.lm_head.to(hidden_device)
         logits = self.lm_head(hidden_states)
+        nvtx.range_pop()
         return logits

@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # 创建结果目录
-RESULT_DIR="result_layers"
+RESULT_DIR="result_coco"
 mkdir -p "$RESULT_DIR"
 
 # 定义device组合
-# device_configs=("1" "1 2" "1 2 3")
-device_configs=("1")
+device_configs=("1" "1 2" "1 2 3")
+# device_configs=("1")
 # 外层循环：不同的层数
 layer_counts=(10 20 30 40 50)
 
@@ -27,11 +27,11 @@ do
         echo "=== Testing with dp_devices=$device_config (d=$d) ==="
         
         # 内层循环：不同的样本数
-        for samples in $(seq 5 1 30)
+        for samples in $(seq 5 5 30)
         do
             echo "Running with max_samples=$samples, layers=$num_layers ($start_layer-$end_layer), devices=$device_config"
             
-            python -u example_replica.py \
+            python example_replica.py \
                 --max_samples $samples \
                 --dp_devices $device_config \
                 --dp_start_layer $start_layer \
